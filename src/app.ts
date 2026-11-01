@@ -10,12 +10,14 @@ import { Scope } from './types.js';
 import { scopePart } from './validation.js';
 import { VaultService } from './vault.js';
 import { ProvisioningService } from './provisioning.js';
+import { RuntimeSnapshotService } from './runtime-snapshot.js';
 import { ApiBearerAuth, ApiHeaders } from '@nestjs/swagger';
 import { InventoryQueries, isDocumentationRequest, setupSwagger, VaultEndpoint } from './swagger.js';
 import { TenantKeyTreeService } from './tenant-key-tree.js';
 import { InventoryService } from './inventory.js';
+import { AuditService, AuditRequest, auditDestinations } from './audit.js';
 
-type ScopedRequest = Request & { vaultScope: Scope };
+type ScopedRequest = AuditRequest & { vaultScope: Scope };
 const Permissions = (...permissions: Permission[]) => SetMetadata('vault-permissions', permissions);
 @Catch()
 class SafeErrors implements ExceptionFilter {
@@ -37,8 +39,10 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const config = validateConfig(input);
   const store = await MongoStore.open(config);
   const grants = new GrantService(store);
+  const audit = new AuditService(auditDestinations(config.audit), store);
   const vault = new VaultService(store, config.baseUrl.replace(/\/$/, ''));
   const provisioning = new ProvisioningService(vault);
+  const runtimeSnapshots = new RuntimeSnapshotService(vault);
   const keyTree = new TenantKeyTreeService(vault);
   const inventory = new InventoryService(vault, config.masterKey);
   class HandlerPermissions implements CanActivate {
@@ -80,6 +84,9 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Runtime', 'Load a complete validated runtime snapshot', 'read', 'Snapshot', 'SnapshotRequest', true)
     @Post('local/snapshot') @HttpCode(200) @Permissions('read')
     snapshot(@Req() req: ScopedRequest, @Body() body: unknown) { return provisioning.snapshot(req.vaultScope, body); }
+    @VaultEndpoint('Runtime', 'Read a complete pinned runtime secret/key set atomically without provisioning', 'read', 'RuntimeSnapshot', 'RuntimeSnapshotRequest', true)
+    @Post('local/runtime-snapshot') @HttpCode(200) @Permissions('read')
+    runtimeSnapshot(@Req() req: ScopedRequest, @Body() body: unknown) { return runtimeSnapshots.snapshot(req.vaultScope, body); }
     @VaultEndpoint('Secrets', 'Set a secret and create a new version', 'write', 'SecretBundle', 'SetSecret')
     @Put('secrets/:name') @HttpCode(200)
     set(@Req() req: ScopedRequest, @Param('name') name: string, @Body() body: unknown) { return vault.create(req.vaultScope, 'secrets', name, body); }
@@ -107,11 +114,12 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Cryptography', 'Decrypt with an explicit RSA key version', 'crypto', 'CryptoResult', 'CryptoInput')
     @Post('keys/:name/:version/decrypt') @HttpCode(200) @Permissions('crypto') decrypt(@Req() req: ScopedRequest, @Param('name') name: string, @Param('version') version: string, @Body() body: unknown) { return vault.crypto(req.vaultScope, name, version, 'decrypt', body); }
   }
-  @Module({ controllers: [VaultController], providers: [{ provide: 'STORE_LIFECYCLE', useValue: { onModuleDestroy: () => store.close() } }] })
+  @Module({ controllers: [VaultController], providers: [{ provide: 'STORE_LIFECYCLE', useValue: { onModuleDestroy: async () => { await audit.close(); await store.close(); } } }] })
   class VaultModule {}
   try {
     const app = await NestFactory.create(VaultModule, { logger: false, bodyParser: false, abortOnError: false });
     app.use(async (req: ScopedRequest, res: Response, next: NextFunction) => {
+      audit.attach(req, res);
       res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
       try {
         const host = req.headers.host ?? '';
@@ -121,14 +129,22 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
         if (!req.headers.authorization) fail(401, 'Unauthorized');
         const match = req.path.match(/^\/namespaces\/([^/]+)\/([^/]+)(\/.*)$/i);
         const scope = { environment: scopePart(req.headers['x-vault-environment']), tenant: scopePart(req.headers['x-vault-tenant']) };
+        req.vaultScope = scope;
         if (match && (match[1] !== scope.environment || match[2] !== scope.tenant)) fail(403, 'Forbidden');
         const path = match ? match[3]! : req.path;
-        await grants.authorize(req.headers.authorization, scope);
+        const authorized = await grants.authenticatedGrants(req.headers.authorization, scope);
+        req.vaultGrantIds = authorized.map(grant => grant.id);
+        req.vaultScope = scope;
         if (!/^\/local\//i.test(path) && req.query['api-version'] !== '2025-07-01') fail(400, 'BadParameter');
         req.vaultScope = scope; next();
       } catch (e) { const err = e instanceof VaultError ? e : new VaultError(500, 'InternalError'); res.status(err.status).json({ error: { code: err.code, message: err.code } }); }
     });
-    app.use(json({ limit: '128kb', strict: true }));
+    const ordinaryJson = json({ limit: '128kb', strict: true });
+    const runtimeJson = json({ limit: '64kb', strict: true });
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const runtimeRead = /^(?:\/namespaces\/[^/]+\/[^/]+)?\/local\/runtime-snapshot\/?$/i.test(req.path);
+      return (runtimeRead ? runtimeJson : ordinaryJson)(req, res, next);
+    });
     app.useGlobalFilters(new SafeErrors());
     setupSwagger(app, config.baseUrl);
     return app;

@@ -1,6 +1,6 @@
 {
   "name": "@kick-playr/local-key-vault",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "NestJS local development vault with an explicit Azure Key Vault REST subset",
   "engines": {
@@ -12,6 +12,7 @@
     "start": "node dist/main.js",
     "start:dev": "npm run build && node dist/main.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+    "test:audit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.audit.config.cjs --runInBand",
     "maint:update": "ncu -u -t minor && npm install && npm audit fix --audit-level moderate && npm install"
   },
   "dependencies": {
@@ -39,5 +40,22 @@
     "minimatch": "11.0.3",
     "glob": "14.0.3",
     "deepmerge": "4.3.1"
-  }
+  },
+  "exports": {
+    "./runtime-client": {
+      "types": "./runtime-client/index.d.cts",
+      "require": "./runtime-client/index.cjs",
+      "import": "./runtime-client/index.cjs"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "runtime-client": [
+        "runtime-client/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "runtime-client/"
+  ]
 }

@@ -5,6 +5,7 @@ import { emptyNamespace, Namespace, Scope, scopeId } from './types.js';
 import { scopePart } from './validation.js';
 import type { StoredGrant } from './grants.js';
 import { databaseFromMongoUri } from './mongodb-url.js';
+import type { AuditEvent } from './audit.js';
 
 export interface StoreConfig { mongoUri: string; masterKey: Buffer }
 interface Envelope { _id: string; schema: 1; revision: number; iv: string; tag: string; data: string }
@@ -94,6 +95,12 @@ export class MongoStore {
   async readGrants(): Promise<StoredGrant[]> {
     const envelope = await this.fetch('grants:registry', this.database.collection<Envelope>('vault_grants'));
     return envelope ? this.decode(envelope) as StoredGrant[] : [];
+  }
+  async appendAudit(event: AuditEvent): Promise<void> {
+    if (this.closed) fail(503, 'StoreUnavailable');
+    try {
+      await this.database.collection<AuditEvent & { _id: string }>('vault_audit').insertOne({ ...event, _id: event.requestId });
+    } catch { fail(503, 'StoreUnavailable'); }
   }
   transactionGrants<T>(fn: (grants: StoredGrant[]) => T): Promise<T> {
     return this.transactionDocument(this.database.collection<Envelope>('vault_grants'), 'grants:registry', () => [] as StoredGrant[], fn);

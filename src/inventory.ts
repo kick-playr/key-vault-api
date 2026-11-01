@@ -13,11 +13,12 @@ export class InventoryService {
   }
   private mac(value: string) { return createHmac('sha256', this.signingKey).update(value).digest(); }
   private parseQuery(input: unknown, local: boolean): Query {
-    const query = object(input, ['maxresults', '$skiptoken', ...(local ? ['kind', 'name', 'namePrefix', 'purpose', 'enabled', 'expiresBefore', 'tagName', 'tagValue'] : ['api-version'])]);
+    const query = object(input, ['maxresults', '$skiptoken', ...(local ? ['kind', 'name', 'namePrefix', 'purpose', 'search', 'enabled', 'expiresBefore', 'tagName', 'tagValue'] : ['api-version'])]);
     check(Object.values(query).every(v => typeof v === 'string'));
     const q = query as Query;
     check(q.maxresults === undefined || /^(?:[1-9]|1[0-9]|2[0-5])$/.test(q.maxresults));
     if (local) {
+      check(q.search === undefined || q.search.length > 0 && q.search.length <= 512 && !/[\u0000-\u001f\u007f]/.test(q.search));
       check(q.kind === undefined || q.kind === 'key' || q.kind === 'secret');
       for (const name of ['name', 'namePrefix', 'purpose']) check(q[name] === undefined || /^[a-zA-Z0-9-]{1,127}$/.test(q[name]!));
       check(q.enabled === undefined || q.enabled === 'true' || q.enabled === 'false');
@@ -30,6 +31,7 @@ export class InventoryService {
   list(scope: Scope, endpoint: Kind | 'local/inventory', input: unknown) {
     const local = endpoint === 'local/inventory', q = this.parseQuery(input, local);
     const limit = Number(q.maxresults ?? 25);
+    const search = q.search?.toLowerCase();
     const filter = Object.fromEntries(Object.entries({ ...q, maxresults: String(limit) }).filter(([k]) => k !== '$skiptoken').sort(([a], [b]) => a.localeCompare(b)));
     const fingerprint = createHmac('sha256', this.signingKey).update(JSON.stringify(filter)).digest('hex');
     let cursor: Cursor | undefined;
@@ -57,6 +59,7 @@ export class InventoryService {
         if (q.name !== undefined && name !== q.name || q.namePrefix !== undefined && !name.startsWith(q.namePrefix)) continue;
         const purpose = item.tags && Object.hasOwn(item.tags, 'purpose') ? item.tags.purpose : undefined;
         if (q.purpose !== undefined && purpose !== q.purpose) continue;
+        if (search !== undefined && !name.toLowerCase().includes(search) && !purpose?.toLowerCase().includes(search)) continue;
         if (q.enabled !== undefined && item.attributes.enabled !== (q.enabled === 'true')) continue;
         if (q.expiresBefore !== undefined && (item.attributes.exp === undefined || item.attributes.exp > Number(q.expiresBefore))) continue;
         if (q.tagName !== undefined && (!item.tags || !Object.hasOwn(item.tags, q.tagName) || item.tags[q.tagName] !== q.tagValue)) continue;

@@ -19,6 +19,7 @@ export function InventoryQueries(local = false) {
     ApiQuery({ name: '$skiptoken', required: false, description: 'Opaque continuation token from nextLink. Bound to the namespace, filters and current generation.', schema: { type: 'string' } }),
   ];
   if (local) {
+    decorators.push(ApiQuery({ name: 'search', required: false, description: 'Case-insensitive literal substring of physical name OR purpose tag. Applied before pagination; combines with other filters using AND.', schema: { type: 'string', minLength: 1, maxLength: 512 } }));
     decorators.push(ApiQuery({ name: 'kind', required: false, enum: ['key', 'secret'] }));
     for (const name of ['name', 'namePrefix', 'purpose', 'tagName', 'tagValue']) decorators.push(ApiQuery({ name, required: false, schema: { type: 'string' } }));
     decorators.push(ApiQuery({ name: 'enabled', required: false, enum: ['true', 'false'] }));

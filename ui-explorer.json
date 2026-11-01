@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "environment": "development",
+  "applications": {
+    "explorer-api": {
+      "bindingRevision": 1,
+      "secrets": [
+        {
+          "mapping": "EXPLORER_MONGODB_URI",
+          "purpose": "explorer-mongodb-uri"
+        },
+        {
+          "mapping": "WORKFLOW_SHARED_WRAPPING_KEY_V1",
+          "purpose": "workflow-shared-wrapping-key-v1"
+        },
+        {
+          "mapping": "EXPLORER_CREDENTIAL_KEY",
+          "purpose": "explorer-credential-key"
+        },
+        {
+          "mapping": "MANAGER_SETUP_CONTROL_KEY",
+          "purpose": "manager-setup-control-key"
+        },
+        {
+          "mapping": "CLERK_SECRET_KEY",
+          "purpose": "explorer-clerk-secret-key"
+        }
+      ]
+    }
+  },
+  "tenants": [
+    {
+      "tenant": "fcrww",
+      "bindingRevision": 2,
+      "keySets": [
+        {
+          "reference": "workflow-local:fcrww:key",
+          "currentWrappingVersion": "v1"
+        }
+      ],
+      "secrets": []
+    }
+  ]
+}

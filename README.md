@@ -399,3 +399,34 @@ npm run build
 ### Stored runtime manifests
 
 Operators can publish metadata bindings once with `./publish-key-vault-bindings.sh --plan examples/explorer-api-bindings-plan.json`. Applications then bootstrap using `LOCAL_KEYVAULT` and stored manifests, without copying generated binding JSON into each consumer. See [manifest publication and revisions](docs/BINDINGS.md#publish-manifests-once-for-simpler-startup). The publisher uses the existing initialized vault database and does not provision secrets, keys or grants.
+
+
+## Enrolled OAuth credential renewal
+
+The optional `renew` grant permission allows only reservation and commit of
+previously operator-enrolled Bexio/Dropbox credential resources. It does not allow
+ordinary secret writes, key operations, enrollment, or manifest publication.
+Enrollment requires `write`. Read/list audit routing is unchanged; OAuth enrollment,
+reservation and commit HTTP operations are audited as writes through
+`VAULT_AUDIT_DESTINATIONS`.
+
+POST `local/oauth-credentials/enroll`, `read`, `begin` and `commit` also support the
+normal namespace prefix. Every runtime operation validates the retained `club-api`
+manifest identity, mapping, provider and enrolled immutable version lineage. A
+renewal changes only accessToken/refreshToken/expiresAt; client identity, Dropbox
+archive root and operator expiry constraints are preserved. Reservations have no
+TTL or automatic takeover, duplicate starts are rejected, and identical commit
+retries return the same immutable version. Pending/ambiguous attempts require
+operator reconciliation before another dispatch. Static keys and manifest pins are
+not advanced during renewal.
+
+Use the sibling club API's `npm run vault:oauth:enable -- --tenant fcrww
+--vault-project ../key-vault-api` default read-only operator preview to enroll the
+existing encrypted session references and upgrade only that runtime grant. Its
+apply mode requires a reviewed digest and saves an encrypted backup. No provider
+request occurs during enrollment. Restart existing vault/club API services after
+building the feature; no bootstrap token or ENV secret must be changed.
+
+Run `npm run test:oauth` for isolated service/HTTP permission/audit tests. Existing
+cloud authentication restrictions still apply; this adds development renewal, not
+cloud workload identity configuration.

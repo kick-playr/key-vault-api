@@ -11,7 +11,7 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const metadata = ({ tokenHash: _, ...grant }: StoredGrant): GrantMetadata => structuredClone(grant);
 export function validatePermissions(value: unknown): Permission[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 10000 ||
-      !value.every(p => ['read', 'write', 'crypto', 'list'].includes(p))) fail(400, 'InvalidGrants');
+      !value.every(p => ['read', 'write', 'crypto', 'list', 'renew'].includes(p))) fail(400, 'InvalidGrants');
   return [...new Set(value)];
 }
 function validateGrant(value: unknown): Grant {

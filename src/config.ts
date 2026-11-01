@@ -4,7 +4,7 @@ import { describeSystemError, fail, VaultError } from './errors.js';
 import { Scope } from './types.js';
 import { databaseFromMongoUri } from './mongodb-url.js';
 import { auditDestinations, AuditDestinations, parseAuditDestinations } from './audit.js';
-export type Permission = 'read' | 'write' | 'crypto' | 'list';
+export type Permission = 'read' | 'write' | 'crypto' | 'list' | 'renew';
 export interface Grant extends Scope { token: string; permissions: Permission[] }
 export interface VaultConfig { mongoUri: string; masterKey: Buffer; baseUrl: string; audit?: AuditDestinations }
 function bootstrapCheck(condition: unknown, detail: string): asserts condition {

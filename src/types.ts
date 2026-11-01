@@ -2,10 +2,16 @@ import type { RuntimeManifest } from '@kick-playr/local-key-vault/runtime-client
 import type { JsonWebKey } from 'node:crypto';
 export interface Attributes { enabled: boolean; created: number; updated: number; nbf?: number; exp?: number; recoveryLevel: 'Purgeable' }
 export interface Version {
+  oauthRenewal?: {mapping: string; operationId: string; previousVersion: string};
   version: string; attributes: Attributes; tags?: Record<string, string>; contentType?: string;
   value?: string; privateKey?: JsonWebKey; publicKey?: JsonWebKey; keySize?: number; keyOps?: string[];
 }
+export interface OAuthCredential {
+ application: 'club-api'; provider: 'bexio' | 'dropbox'; purpose: string; anchorVersion: string; currentVersion: string; versions: string[];
+ attempts: {operationId: string; expectedVersion: string; version?: string; digest?: string}[];
+}
 export interface Namespace {
+  oauthCredentials?: Record<string, OAuthCredential>;
   generation: number; keys: Record<string, Version[]>; secrets: Record<string, Version[]>;
   tombstones: string[];
   runtimeManifests?: Record<string, { currentRevision: number; versions: Record<string, RuntimeManifest> }>;

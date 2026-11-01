@@ -40,6 +40,8 @@ export function auditOperation(method: string, path: string): Operation | undefi
     if (method === 'PUT' && /^\/local\/runtime-manifests\/[^/]+$/i.test(path)) return { category: 'write', action: 'local.runtime-manifests.publish' };
     return;
   }
+  const oauth = /^\/local\/oauth-credentials\/(enroll|read|begin|commit)$/.exec(path);
+  if (oauth && method === 'POST') return { category: oauth[1] === 'read' ? 'read' : 'write', action: `local.oauth-credentials.${oauth[1]}` };
   const local = /^\/local\/(session|key-tree|inventory|snapshot|runtime-snapshot|reconcile)$/i.exec(path);
   if (local) {
     const route = local[1]!.toLowerCase();

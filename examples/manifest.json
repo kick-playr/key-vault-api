@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "purpose": "data-encryption",
+      "kind": "key",
+      "scope": "tenant",
+      "envName": "APP_DATA_KEY_ID",
+      "kty": "RSA",
+      "keySize": 2048,
+      "keyOps": ["encrypt", "decrypt"]
+    },
+    {
+      "purpose": "database",
+      "kind": "secret",
+      "scope": "tenant",
+      "envName": "APP_DATABASE_URL"
+    }
+  ]
+}

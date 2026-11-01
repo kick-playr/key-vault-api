@@ -76,11 +76,15 @@ export class GrantService {
     });
   }
   async authorize(auth: unknown, scope: Scope, permissions: Permission[] = []): Promise<void> {
+    await this.authenticatedGrants(auth, scope, permissions);
+  }
+  async authenticatedGrants(auth: unknown, scope: Scope, permissions: Permission[] = []): Promise<GrantMetadata[]> {
     if (typeof auth !== 'string' || !auth.startsWith('Bearer ') || auth.length > 4103 || auth.length <= 7) fail(401, 'Unauthorized');
     const digest = Buffer.from(hash(auth.slice(7)), 'hex');
     const matching = (await this.store.readGrants()).filter(g => g.enabled && timingSafeEqual(Buffer.from(g.tokenHash, 'hex'), digest));
     if (!matching.length) fail(401, 'Unauthorized');
     if (!permissions.every(p => matching.some(g => g.environment === scope.environment && g.tenant === scope.tenant && g.permissions.includes(p))) ||
         !matching.some(g => g.environment === scope.environment && g.tenant === scope.tenant)) fail(403, 'Forbidden');
+    return matching.filter(g => g.environment === scope.environment && g.tenant === scope.tenant).map(metadata);
   }
 }

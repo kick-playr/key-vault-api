@@ -31,6 +31,7 @@ Supply the following bootstrap values:
 | `VAULT_MASTER_KEY` | yes | Base64 encoding of exactly 32 random bytes, kept outside the store |
 | `VAULT_MONGODB_URI` | yes | Complete connection URL, e.g. `mongodb://127.0.0.1:27017/key-vault` |
 | `VAULT_BASE_URL` | no | Default `http://127.0.0.1:4000`; only loopback HTTP is accepted |
+| `VAULT_AUDIT_DESTINATIONS` | no | JSON routing per operation category; defaults write/crypto to MongoDB and read/list to console. See [audit logging](docs/AUDIT.md). |
 
 Every shell script supports `--help` (or `-h`) with its own usage, arguments and examples, without compiling or connecting to MongoDB: `./create-key.sh --help`, `./create-grants.sh --help`, `./migrate-grants.sh --help`, `./rotate.sh --help`, `./grants.sh --help`, `./import-fcrww-keys.sh --help`, and `./create-tenant-keys.sh --help`.
 

@@ -1,5 +1,5 @@
-import { api, call, fixture } from './helpers';
-import { vaultName } from '../src/manifest';
+import { api, call, fixture } from './helpers.js';
+import { vaultName } from '../src/manifest.js';
 
 export const manifest = { schemaVersion: 1, entries: [
   { purpose: 'data-encryption', kind: 'key', scope: 'tenant', envName: 'DATA_KEY_ID', kty: 'RSA', keySize: 2048, keyOps: ['encrypt', 'decrypt'] },
@@ -21,7 +21,7 @@ describe('automatic manifest provisioning', () => {
     const versions = await call(f.app, 'get', `/keys/${name}/versions` + api).expect(200);
     expect(versions.body.value).toHaveLength(1);
     await f.app.close();
-    const { createApp } = await import('../src/app'); f.app = await createApp(f.config); await f.app.init();
+    const { createApp } = await import('../src/app.js'); f.app = await createApp(f.config); await f.app.init();
     expect((await reconcile().expect(200)).body.mappings.DATA_KEY_ID).toBe(kid);
     expect(vaultName({ environment: 'dev', tenant: 'b' }, 'key', 'data-encryption')).not.toBe(name);
   });
@@ -55,7 +55,7 @@ describe('automatic manifest provisioning', () => {
     }
   });
   it('reconciles safely across two Nest servers and observes rotation/revocation from either writer', async () => {
-    const { createApp } = await import('../src/app');
+    const { createApp } = await import('../src/app.js');
     const second = await createApp(f.config); await second.init();
     try {
       const responses = await Promise.all(Array.from({ length: 6 }, (_, i) => call(i % 2 ? second : f.app, 'post', '/local/reconcile')

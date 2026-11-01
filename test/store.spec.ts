@@ -1,14 +1,15 @@
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { MongoClient } from 'mongodb';
-import { MongoStore } from '../src/store';
-import { scopeId } from '../src/types';
-import { mongoUri } from './mongo';
+import { MongoStore } from '../src/store.js';
+import { formatStartupError } from '../src/errors.js';
+import { scopeId } from '../src/types.js';
+import { mongoUri } from './mongo.js';
 
 describe('encrypted MongoDB store', () => {
   let store: MongoStore | undefined, second: MongoStore | undefined, client: MongoClient;
   let database: string;
   const key = randomBytes(32), scope = { environment: 'dev', tenant: 'a' };
-  const config = () => ({ mongoUri, mongoDatabase: database, masterKey: key });
+  const config = () => ({ mongoUri: `${mongoUri}/${database}`, masterKey: key });
   const id = () => createHash('sha256').update(scopeId(scope)).digest('hex');
   beforeEach(async () => { database = 'test_' + randomUUID().replaceAll('-', ''); client = await new MongoClient(mongoUri).connect(); });
   afterEach(async () => { await store?.close(); await second?.close(); store = second = undefined; await client.db(database).dropDatabase(); await client.close(); });
@@ -18,8 +19,15 @@ describe('encrypted MongoDB store', () => {
     await store.transaction(scope, ns => { ns.tombstones.push('secret-canary'); });
     const raw = await client.db(database).collection('vault_namespaces').findOne({ _id: id() } as never);
     expect(raw).toBeTruthy(); expect(JSON.stringify(raw)).not.toContain('secret-canary');
+    expect(await client.db(database).collection('vault_metadata').countDocuments()).toBe(1);
     await store.close(); store = await MongoStore.open(config());
     expect(await store.read(scope, ns => ns?.tombstones)).toEqual(['secret-canary']);
+  });
+  it('rejects a bare MongoDB URL before creating fallback database collections', async () => {
+    await expect(MongoStore.open({ mongoUri, masterKey: key }).then(opened => { store = opened; })).rejects.toThrow('InvalidBootstrap');
+    expect(await client.db('local_key_vault').collection('vault_namespaces').countDocuments()).toBe(0);
+    expect(await client.db('local_key_vault').collection('vault_metadata').countDocuments()).toBe(0);
+    expect(await client.db('test').collection('vault_namespaces').countDocuments()).toBe(0);
   });
   it('rejects wrong master keys at startup and corrupted namespace ciphertext on read', async () => {
     store = await MongoStore.open(config());
@@ -63,7 +71,16 @@ describe('encrypted MongoDB store', () => {
   it('fails closed after close and does not expose a MongoDB URI on connection failure', async () => {
     store = await MongoStore.open(config()); await store.close();
     await expect(store.read(scope, ns => ns)).rejects.toThrow('StoreUnavailable');
-    await expect(MongoStore.open({ ...config(), mongoUri: 'mongodb://test-user:test-password@127.0.0.1:1' })).rejects.toThrow(/^StoreUnavailable$/);
+    await expect(MongoStore.open({ ...config(), mongoUri: 'mongodb://test-user:test-password@127.0.0.1:1/key-vault' })).rejects.toThrow(/^StoreUnavailable$/);
+  });
+  it('explains wrong master keys during startup without leaking key material', async () => {
+    store = await MongoStore.open(config());
+    try { second = await MongoStore.open({ ...config(), masterKey: randomBytes(32) }); throw new Error('Expected failure'); }
+    catch (error) {
+      const detail = formatStartupError(error);
+      expect(detail).toContain('master-key verification'); expect(detail).toContain('VAULT_MASTER_KEY');
+      expect(detail).not.toContain(key.toString('base64'));
+    }
   });
   it('does not commit failed MongoDB writes or serve cached data after a failed read', async () => {
     store = await MongoStore.open(config());

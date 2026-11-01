@@ -1,5 +1,5 @@
-import { call, fixture, otherToken, token } from './helpers';
-import { RuntimeVault } from '../src/runtime';
+import { call, fixture, otherToken, token } from './helpers.js';
+import { RuntimeVault } from '../src/runtime.js';
 
 const tenantManifest = { schemaVersion: 1, entries: [{ purpose: 'database', kind: 'secret', scope: 'tenant', envName: 'APP_DATABASE_URL' }] };
 describe('server runtime loading', () => {
@@ -36,7 +36,7 @@ describe('server runtime loading', () => {
   it('does not accept stale revision events or serve a revoked secret after refresh', async () => {
     await client.initialize(a, tenantManifest, 2, { database: 'new' });
     await expect(client.refresh(a, tenantManifest, 1)).rejects.toThrow('StaleRevision');
-    const name = (await import('../src/manifest')).vaultName(a, 'secret', 'database');
+    const name = (await import('../src/manifest.js')).vaultName(a, 'secret', 'database');
     await call(f.app, 'delete', `/secrets/${name}?api-version=2025-07-01`).expect(200);
     await expect(client.refresh(a, tenantManifest, 2)).rejects.toThrow('RuntimeRefreshFailed');
     expect(() => client.get(a)).toThrow('RuntimeNotReady');

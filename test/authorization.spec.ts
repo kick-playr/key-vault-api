@@ -1,6 +1,6 @@
 import request from 'supertest';
-import { api, call, fixture, token } from './helpers';
-import { createApp } from '../src/app';
+import { api, call, fixture, token } from './helpers.js';
+import { createApp } from '../src/app.js';
 
 describe('least-privilege callers', () => {
   it('enforces read/write/crypto permissions separately and hides values from errors', async () => {

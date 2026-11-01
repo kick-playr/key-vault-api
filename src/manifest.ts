@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { requireCondition as check } from './errors';
-import { Scope } from './types';
-import { envName, identifier, object } from './validation';
-import { keyInput } from './vault';
+import { requireCondition as check } from './errors.js';
+import { Scope } from './types.js';
+import { envName, identifier, object } from './validation.js';
+import { keyInput } from './vault.js';
 
 export interface Entry {
   purpose: string; kind: 'key' | 'secret'; scope: 'tenant' | 'process'; envName: string;

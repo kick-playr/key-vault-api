@@ -4,7 +4,7 @@ NestJS/TypeScript implementation of APP-35 for **local development**. It provisi
 
 ## Run
 
-Use Node.js 22 or newer, npm, and MongoDB 7 or 8. Tests require a local `mongod` executable (or `MONGOD_BINARY` pointing to one); they launch disposable loopback databases and never use your configured MongoDB URI. Install and verify:
+Use **Node.js 24.x**, npm, and MongoDB 7 or 8. `.nvmrc` selects Node 24 (`nvm use`), and the package engine and Node type definitions target that major version. Tests require a local `mongod` executable (or `MONGOD_BINARY` pointing to one); they launch disposable loopback databases and never use your configured MongoDB URI. Install and verify:
 
 ```sh
 npm ci
@@ -12,15 +12,28 @@ npm run build
 npm test
 ```
 
-Supply bootstrap configuration through your shell, OS credential manager, or development launcher:
+The current dependency baseline is NestJS 12, MongoDB driver 7, and TypeScript 6. The project uses native ESM with explicit `.js` paths in TypeScript imports and NodeNext module resolution. `npm run start:dev` compiles TypeScript before launching Node; no ts-node loader is required. Jest runs through the supplied Node VM-modules flag and may print Node's experimental VM warning. TypeScript stays on 6 because the current ts-jest peer range excludes 7; `@types/node` stays on 24 even when a newer Node major is available.
+
+
+Copy the bootstrap template and fill the required values:
+
+```sh
+cp env.example .env
+chmod 600 .env
+```
+
+Both `npm start` and `npm run start:dev` read `.env` from the current working directory before validating bootstrap configuration. The server uses Node 24's built-in dotenv parser; no additional dotenv package is required. Existing exported environment variables take precedence. A missing `.env` is allowed when all required values come from the shell, credential manager or launcher. Invalid or unreadable configuration stops startup with safe diagnostics. `.env` is ignored by Git; [env.example](env.example) contains only blank credentials and illustrative shapes.
+
+Supply the following bootstrap values:
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `VAULT_MASTER_KEY` | yes | Base64 encoding of exactly 32 random bytes, kept outside the store |
 | `VAULT_GRANTS` | yes | JSON array of caller grants, shown below |
-| `VAULT_MONGODB_URI` | yes | MongoDB connection URI, including authentication/TLS options appropriate to your database |
-| `VAULT_MONGODB_DATABASE` | no | Default `local_key_vault`; explicit database name, independent of the URI path |
-| `VAULT_BASE_URL` | no | Default `http://127.0.0.1:4567`; only loopback HTTP is accepted |
+| `VAULT_MONGODB_URI` | yes | Complete connection URL, e.g. `mongodb://127.0.0.1:27017/key-vault` |
+| `VAULT_BASE_URL` | no | Default `http://127.0.0.1:4000`; only loopback HTTP is accepted |
+
+Run `./create-grants.sh` to print a ready-to-copy `VAULT_GRANTS` assignment with a fresh random token for environment `dev`, tenant `tenant-123`, and `read`/`write`/`crypto`/`list` permissions. Copy that line into `.env`, adjusting the tenant/environment to your application, then restart the API.
 
 The following is a **configuration shape**, not usable credentials. Generate the master key and separate caller tokens with a cryptographically secure credential source; retain them securely across restarts. The service intentionally does not invent or print bootstrap credentials.
 
@@ -30,7 +43,7 @@ The following is a **configuration shape**, not usable credentials. Generate the
     "token": "<at-least-32-characters-of-random-token-material>",
     "environment": "dev",
     "tenant": "tenant-123",
-    "permissions": ["read", "write", "crypto"]
+    "permissions": ["read", "write", "crypto", "list"]
   }
 ]
 ```
@@ -39,15 +52,29 @@ The following is a **configuration shape**, not usable credentials. Generate the
 npm start
 ```
 
+Startup errors identify the invalid configuration variable or failing phase (MongoDB URL, connection, database selection, key verifier, master-key verification or HTTP listener). Known error codes such as `ECONNREFUSED`, MongoDB authentication code `18`, permission code `13` and `EADDRINUSE` include actionable hints. For example:
+
+```text
+[startup] InvalidBootstrap: VAULT_GRANTS is missing or invalid JSON; use a quoted JSON array of caller grants in .env.
+```
+
+Use the original `VAULT_MASTER_KEY` when reconnecting to an existing database. Diagnostics report safe names/codes and static hints while keeping secret values and credential-bearing URLs out of output.
+
 The vault HTTP process binds to `127.0.0.1`. MongoDB must already be available; startup checks its connection and an encrypted master-key verifier before accepting requests. Keep MongoDB credentials and the master key outside the database and outside source control. Configure a dedicated database/user with read/write access to `vault_metadata` and `vault_namespaces`; never grant callers direct database access. Use authentication and TLS for non-loopback MongoDB connections.
 
-For an optional local MongoDB container, provide `VAULT_MONGODB_PASSWORD` through your launcher, then run:
+For an optional local MongoDB container, run:
 
 ```sh
 docker compose up -d mongodb
 ```
 
-Set `VAULT_MONGODB_URI` to `mongodb://vault:<URL-encoded-password>@127.0.0.1:27017/?authSource=admin` before starting the Nest server. Compose binds MongoDB to loopback, enables password authentication and persists data in a named volume. Its root account is a local bootstrap convenience; use a database-specific account for shared installations. Changing the Compose password variable after volume initialization does not rotate an existing MongoDB user's password.
+Use the URL from `env.example`:
+
+```dotenv
+VAULT_MONGODB_URI=mongodb://127.0.0.1:27017/key-vault
+```
+
+MongoDB has a single configuration variable. The URL must include an explicit database path, such as `/key-vault`. Missing, empty or whitespace-only database paths stop startup with an `InvalidBootstrap` error before connecting; no default database is used. `authSource` specifies authentication and does not replace the required database path. Both `vault_namespaces` and `vault_metadata` use that same database. If your MongoDB requires credentials or TLS, include them in the URL. The optional Compose service runs without authentication and binds its published port to loopback for local development. It persists data in a named volume.
 
 ### MongoDB persistence and concurrency
 
@@ -61,13 +88,50 @@ A namespace is limited to **8 MiB of serialized plaintext** (including retained 
 
 The former file backend is removed. Existing `.vault` files are left untouched and are **not imported automatically**. If you already provisioned local keys, retain the old encrypted store and master key until an explicit migration is designed; starting with a new empty MongoDB database creates new keys and cannot decrypt data tied to the old keys. No migration was performed by this change.
 
+## Swagger documentation
+
+After starting or restarting the API, open [Swagger UI](http://127.0.0.1:4000/docs). The [OpenAPI JSON](http://127.0.0.1:4000/docs-json) is generated from the controller annotations at startup and can be downloaded for client tooling. Both use the configured API port.
+
+The documentation includes every supported key/secret, version, crypto, reconciliation and snapshot endpoint, including namespace aliases, request/response schemas, errors, required permissions, tenant headers and the exact Azure API version. The local documentation pages/assets and JSON need no token. API operations still require authentication.
+
+Endpoints are organized into **Provisioning**, **Runtime**, **Inventory**, **Keys**, **Secrets**, **Cryptography**, and **Namespace aliases**, each with a description. Namespace aliases are grouped separately to keep the primary operations easy to find. Sections start collapsed; expand the relevant group or use the filter box to narrow the list.
+
+Click **Authorize** and paste a token from your `VAULT_GRANTS` configuration (without the `Bearer` prefix). For each request, fill `x-vault-environment` and `x-vault-tenant` to match that token's grant, and select `api-version=2025-07-01` for data-plane operations. Then use **Try it out**. These are real API calls; mutating operations create versions or permanently delete data.
+
+Swagger UI uses local bundled assets, disables external validation and does not persist authorization tokens in browser storage. Same-origin browser API requests are accepted with the usual permissions; other Origins remain rejected, and CORS is disabled. Use the `127.0.0.1` URL shown above rather than `localhost`, matching the existing loopback host policy.
+
 ## Callers and namespaces
 
-All endpoints require a bearer token plus `x-vault-environment` and `x-vault-tenant`. Grants match these identifiers exactly. A `read` caller can read plaintext secrets in its own namespace; a `write` caller can create/rotate, update and delete; `crypto` permits operations on keys in that namespace. Reconciliation requires both `write` and `read` because it returns a complete snapshot. Bootstrap grants must be changed by a trusted launcher and require a service restart. HTTP errors contain safe codes, never input values or stack traces. Responses are `Cache-Control: no-store`; browser Origins are rejected and CORS is not enabled.
+All endpoints require a bearer token plus `x-vault-environment` and `x-vault-tenant`. Grants match these identifiers exactly. A `read` caller can read plaintext secrets in its own namespace; a `write` caller can create/rotate, update and delete; `crypto` permits operations on keys in that namespace. The separate `list` permission grants access to latest-object metadata inventory without allowing secret values, runtime snapshots, writes or crypto. Existing version-history endpoints retain their `read` requirement. Reconciliation requires both `write` and `read` because it returns a complete snapshot. Bootstrap grants must be changed by a trusted launcher and require a service restart. HTTP errors contain safe codes, never input values or stack traces. Responses are `Cache-Control: no-store`; browser requests must use the same origin and CORS is not enabled.
 
 Environment and tenant identifiers are case-sensitive stable opaque IDs, 1–64 characters of letters/digits/underscore/hyphen starting with a letter or digit. `_shared` is reserved for process-scoped values. Do not use human names or identifiers that change on tenant rename.
 
 Object IDs use `/namespaces/{environment}/{tenant}/keys|secrets/{name}/{version}`. Those paths can also be called with matching authorization headers; mismatched path/header namespaces fail. The shorter `/keys/...` and `/secrets/...` routes select their namespace from headers. This namespace selection and local bearer authentication are **local extensions**, not Azure Entra ID authentication.
+
+## Listing, inventory and metadata search
+
+Add `list` to a caller's grant in `.env` and restart the API to enable inventory. Existing grants are not changed automatically. For a metadata-only caller, use `"permissions": ["list"]`; `read` does not imply `list`. The grant generator includes all four permissions for its default development caller.
+
+Azure-compatible listing endpoints return latest-object metadata with versionless IDs:
+
+```text
+GET /keys?api-version=2025-07-01&maxresults=25
+GET /secrets?api-version=2025-07-01&maxresults=25
+```
+
+The local extension combines keys and secrets, adding names, kind, latest version, versioned ID and purpose:
+
+```text
+GET /local/inventory?kind=secret&namePrefix=db-&enabled=false
+GET /local/inventory?purpose=data-encryption
+GET /local/inventory?tagName=owner&tagValue=team-a&expiresBefore=1800000000
+```
+
+All endpoints require the usual bearer token and tenant/environment headers and have matching `/namespaces/{environment}/{tenant}/...` aliases. Filters are ANDed: `kind=key|secret`, exact `name`, `namePrefix`, exact `purpose`, `enabled=true|false`, `expiresBefore` (inclusive Unix seconds), and paired `tagName`/`tagValue` (exact equality). General tag values are literal strings, not regexes. Azure list endpoints support only their standard version/pagination parameters. Local inventory takes no API version.
+
+Both list and inventory responses use `{ "value": [...], "nextLink": "..." }`. `maxresults` is 1–25, default 25. Follow `nextLink` with the same authorization and namespace headers; it contains an opaque `$skiptoken`. Cursors expire after 15 minutes and bind namespace, endpoint, filters, page size and generation. Tampered/mismatched/expired cursors fail `400 InvalidContinuationToken`; a namespace mutation invalidates pagination with `409 PaginationInvalidated`, so restart from the first page. Empty or final pages omit `nextLink`.
+
+Inventory includes disabled, expired and future-dated objects for auditing, but excludes permanently deleted objects and returns only each object's latest metadata. It never includes secret values, public JWKs or private key material. New manifest-provisioned keys/secrets receive a `purpose` tag; reconciliation-created secret versions retain existing tags. Existing versions are not automatically modified or rotated: tag legacy objects with metadata PATCH to search their purpose. Listing scans/decrypts only the authorized encrypted namespace; no plaintext search index is created.
 
 ## Automatic provisioning
 
@@ -146,6 +210,7 @@ Every data-plane request requires exactly `?api-version=2025-07-01`. The tested 
 
 | Method and path | Supported behavior |
 | --- | --- |
+| `GET /keys` / `GET /secrets` | Paginated latest-object metadata; separate `list` permission, no key material or values |
 | `POST /keys/{name}/create` | RSA 2048 (default)/3072, `key_ops` encrypt/decrypt; **creates a new version**, including when name exists |
 | `GET /keys/{name}[/{version}]` | Public JWK only; latest if version omitted |
 | `GET /keys/{name}/versions` | Version metadata with `kid`, no private material |
@@ -164,6 +229,6 @@ Attributes support `enabled`, epoch-second `nbf` and `exp`; responses include cr
 
 Explicit key create / secret set creates a new version; retain old version IDs alongside encrypted data. Existing enabled versions remain usable, so ciphertext from before a rotation can still be decrypted. Disable a version with PATCH to revoke access, then refresh affected consumers. Delete removes **all** versions permanently and blocks ordinary reconciliation from recreating that purpose. To deliberately reprovision, perform an explicit administrative create/set first or introduce a new manifest purpose under a newer revision. Never delete a key needed for old data.
 
-This subset does not implement soft deletion, recovery, purge, certificates, key import/export, symmetric/HSM keys, signing, backup/restore, rotation policies, list-all endpoints, pagination, Entra ID, TLS or comprehensive Azure SDK compatibility. Version lists return the complete local list without pagination. Metadata/delete responses and namespace-bearing IDs are explicitly limited local semantics. Use the narrow REST surface described here; do not treat this service as a drop-in replacement for the entire Azure service.
+This subset does not implement soft deletion, recovery, purge, certificates, key import/export, symmetric/HSM keys, signing, backup/restore, rotation policies, Entra ID, TLS or comprehensive Azure SDK compatibility. Version lists return the complete local list without pagination. Metadata/delete responses and namespace-bearing IDs are explicitly limited local semantics. Use the narrow REST surface described here; do not treat this service as a drop-in replacement for the entire Azure service.
 
 It is not an HSM or production security boundary. Local administrators/processes able to read bootstrap credentials can access the database contents. There is no live key generation, migration of existing secrets, credential change or deployment performed as part of this implementation. Freddie/Chris approval referenced by APP-35 is not implied by these tests or this code.

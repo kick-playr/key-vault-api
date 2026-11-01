@@ -1,4 +1,4 @@
-import { requireCondition as check } from './errors';
+import { requireCondition as check } from './errors.js';
 export function object(value: unknown, allowed: string[]): Record<string, unknown> {
   check(value !== null && typeof value === 'object' && !Array.isArray(value));
   const record = value as Record<string, unknown>;

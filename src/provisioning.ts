@@ -1,9 +1,9 @@
 import { timingSafeEqual } from 'node:crypto';
-import { fail, requireCondition as check } from './errors';
-import { digest, Manifest, parseManifest, vaultName } from './manifest';
-import { Namespace, Scope } from './types';
-import { object } from './validation';
-import { active, changed, find, newKey, newSecret, VaultService } from './vault';
+import { fail, requireCondition as check } from './errors.js';
+import { digest, Manifest, parseManifest, vaultName } from './manifest.js';
+import { Namespace, Scope } from './types.js';
+import { object } from './validation.js';
+import { active, changed, find, newKey, newSecret, VaultService } from './vault.js';
 
 export interface Snapshot {
   environment: string; tenant: string; generation: number; revision: number;
@@ -44,14 +44,14 @@ export class ProvisioningService {
           if (kind === 'keys' && (existing.keySize !== entry.keySize || digest([...(existing.keyOps ?? [])].sort()) !== digest(entry.keyOps))) fail(409, 'KeyPolicyMismatch');
           if (kind === 'secrets' && Object.hasOwn(secrets, entry.purpose)) {
             const a = Buffer.from(digest(existing.value)), b = Buffer.from(digest(secrets[entry.purpose]));
-            if (!timingSafeEqual(a, b)) { ns.secrets[name]!.push(newSecret({ value: secrets[entry.purpose] })); changed(ns, 'reconcile:secret', name); }
+            if (!timingSafeEqual(a, b)) { ns.secrets[name]!.push(newSecret({ value: secrets[entry.purpose], tags: existing.tags })); changed(ns, 'reconcile:secret', name); }
           }
         } else {
           if (ns.tombstones.includes(`${kind}/${name}`)) fail(409, 'RevokedResource');
           if (kind === 'secrets' && !Object.hasOwn(secrets, entry.purpose)) fail(409, 'MissingProvidedSecret');
           const item = kind === 'keys'
-            ? await newKey({ kty: entry.kty, key_size: entry.keySize, key_ops: entry.keyOps })
-            : newSecret({ value: secrets[entry.purpose] });
+            ? await newKey({ kty: entry.kty, key_size: entry.keySize, key_ops: entry.keyOps, tags: { purpose: entry.purpose } })
+            : newSecret({ value: secrets[entry.purpose], tags: { purpose: entry.purpose } });
           ns[kind][name] = [item]; changed(ns, 'provision:' + kind, name);
         }
       }

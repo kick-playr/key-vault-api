@@ -1,9 +1,26 @@
 {
   "compilerOptions": {
-    "target": "ES2023", "module": "commonjs", "moduleResolution": "node",
-    "strict": true, "esModuleInterop": true, "experimentalDecorators": true,
-    "emitDecoratorMetadata": true, "outDir": "dist", "skipLibCheck": true,
-    "noUncheckedIndexedAccess": true, "forceConsistentCasingInFileNames": true
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "outDir": "dist",
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "rootDir": ".",
+    "types": [
+      "node",
+      "jest"
+    ]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "examples/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "examples/**/*.ts"
+  ]
 }

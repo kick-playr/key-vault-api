@@ -1,10 +1,11 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { Collection, MongoClient, MongoServerError } from 'mongodb';
-import { fail } from './errors';
-import { emptyNamespace, Namespace, Scope, scopeId } from './types';
-import { scopePart } from './validation';
+import { Collection, Db, MongoClient, MongoServerError } from 'mongodb';
+import { describeSystemError, fail } from './errors.js';
+import { emptyNamespace, Namespace, Scope, scopeId } from './types.js';
+import { scopePart } from './validation.js';
+import { databaseFromMongoUri } from './mongodb-url.js';
 
-export interface StoreConfig { mongoUri: string; mongoDatabase: string; masterKey: Buffer }
+export interface StoreConfig { mongoUri: string; masterKey: Buffer }
 interface Envelope { _id: string; schema: 1; revision: number; iv: string; tag: string; data: string }
 const MAX_PLAINTEXT_BYTES = 8 * 1024 * 1024;
 const duplicate = (e: unknown) => e instanceof MongoServerError && e.code === 11000;
@@ -14,34 +15,46 @@ export class MongoStore {
   private closed = false;
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly collection: Collection<Envelope>;
-  private constructor(private readonly client: MongoClient, private readonly config: StoreConfig) {
-    this.collection = client.db(config.mongoDatabase).collection<Envelope>('vault_namespaces');
+  private readonly database: Db;
+  private constructor(private readonly client: MongoClient, private readonly config: StoreConfig, database: string) {
+    this.database = client.db(database);
+    this.collection = this.database.collection<Envelope>('vault_namespaces');
   }
   static async open(config: StoreConfig): Promise<MongoStore> {
+    const database = databaseFromMongoUri(config.mongoUri);
     if (!Buffer.isBuffer(config.masterKey) || config.masterKey.length !== 32 ||
-        !/^mongodb(?:\+srv)?:\/\/\S+$/.test(config.mongoUri) || !/^[a-zA-Z][a-zA-Z0-9_-]{0,62}$/.test(config.mongoDatabase)) fail(500, 'InvalidBootstrap');
+        !/^mongodb(?:\+srv)?:\/\/\S+$/.test(config.mongoUri)) fail(500, 'InvalidBootstrap');
     let client: MongoClient | undefined;
     const copy = { ...config, masterKey: Buffer.from(config.masterKey) };
+    let stage = 'MongoDB URL parsing';
     try {
       client = new MongoClient(config.mongoUri, {
         serverSelectionTimeoutMS: 3000, connectTimeoutMS: 3000, socketTimeoutMS: 5000,
         readPreference: 'primary', readConcern: { level: 'majority' },
         writeConcern: { w: 'majority', wtimeoutMS: 5000 }, retryWrites: false,
       });
+      stage = 'MongoDB connection';
       await client.connect();
-      const store = new MongoStore(client, copy);
+      stage = 'MongoDB database selection';
+      const store = new MongoStore(client, copy, database);
       // Shared encrypted key verifier; unique _id makes simultaneous first starts safe.
-      const metadata = client.db(config.mongoDatabase).collection<Envelope>('vault_metadata');
+      const metadata = store.database.collection<Envelope>('vault_metadata');
+      stage = 'MongoDB key verifier access';
       let marker = await metadata.findOne({ _id: 'master-key-check' });
       if (!marker) {
         const candidate = store.encode('master-key-check', 0, { marker: 'local-vault-key-check-v1' });
         try { await metadata.insertOne(candidate); } catch (e) { if (!duplicate(e)) throw e; }
         marker = await metadata.findOne({ _id: 'master-key-check' });
       }
+      stage = 'MongoDB master-key verification';
       if (!marker || (store.decode(marker) as { marker?: string }).marker !== 'local-vault-key-check-v1') throw new Error();
       return store;
-    } catch {
-      await client?.close().catch(() => undefined); copy.masterKey.fill(0); fail(503, 'StoreUnavailable');
+    } catch (error) {
+      await client?.close().catch(() => undefined); copy.masterKey.fill(0);
+      const hint = stage === 'MongoDB master-key verification'
+        ? 'VAULT_MASTER_KEY cannot decrypt the stored verifier, or the verifier is corrupt. Use the original master key for this database.'
+        : describeSystemError(error);
+      fail(503, 'StoreUnavailable', `${stage}: ${hint}`);
     }
   }
   private id(scope: Scope) {

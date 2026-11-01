@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { api, call, fixture, token } from './helpers';
+import { api, call, fixture, token } from './helpers.js';
 
 describe('Azure subset HTTP contract', () => {
   let f: Awaited<ReturnType<typeof fixture>>;
@@ -13,7 +13,7 @@ describe('Azure subset HTTP contract', () => {
   it('sets new secret versions, retains old values and isolates tenants', async () => {
     const one = await call(f.app, 'put', '/secrets/password' + api).send({ value: 'first', contentType: 'password', tags: { owner: 'dev' } }).expect(200);
     expect(one.body).toMatchObject({ value: 'first', attributes: { enabled: true, recoveryLevel: 'Purgeable' } });
-    expect(one.body.id).toMatch(/^http:\/\/127.0.0.1:4567\/namespaces\/dev\/a\/secrets\/password\/[a-f0-9]{32}$/);
+    expect(one.body.id).toMatch(/^http:\/\/127.0.0.1:4000\/namespaces\/dev\/a\/secrets\/password\/[a-f0-9]{32}$/);
     const two = await call(f.app, 'put', '/secrets/password' + api).send({ value: 'second' }).expect(200);
     expect(two.body.id).not.toBe(one.body.id);
     const version = one.body.id.split('/').pop();

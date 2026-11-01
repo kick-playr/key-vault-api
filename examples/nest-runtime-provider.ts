@@ -1,6 +1,6 @@
 // Consumer-side example, not part of the vault server. Adapt imports to your package layout.
 import { Module } from '@nestjs/common';
-import { RuntimeVault } from '../src/runtime';
+import { RuntimeVault } from '../src/runtime.js';
 
 export interface ConsumerBootstrap {
   environment: string;

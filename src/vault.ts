@@ -1,9 +1,9 @@
 import { createPrivateKey, createPublicKey, generateKeyPair, privateDecrypt, publicEncrypt, randomUUID, constants } from 'node:crypto';
 import { promisify } from 'node:util';
-import { MongoStore } from './store';
-import { Attributes, Namespace, Scope, Version } from './types';
-import { fail, requireCondition as check } from './errors';
-import { attributes, identifier, object, tags } from './validation';
+import { MongoStore } from './store.js';
+import { Attributes, Namespace, Scope, Version } from './types.js';
+import { fail, requireCondition as check } from './errors.js';
+import { attributes, identifier, object, tags } from './validation.js';
 
 const generate = promisify(generateKeyPair);
 export type Kind = 'keys' | 'secrets';

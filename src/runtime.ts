@@ -1,8 +1,8 @@
 // Server-only entry point. Never import into a browser application.
-import { digest, Manifest, parseManifest } from './manifest';
-import { Snapshot } from './provisioning';
-import { Scope, scopeId } from './types';
-import { scopePart } from './validation';
+import { digest, Manifest, parseManifest } from './manifest.js';
+import { Snapshot } from './provisioning.js';
+import { Scope, scopeId } from './types.js';
+import { scopePart } from './validation.js';
 
 export interface RuntimeConfig {
   baseUrl: string; token: (scope: Scope) => string; ttlMs?: number; timeoutMs?: number;

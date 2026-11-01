@@ -1,10 +1,10 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { createApp } from '../src/app';
-import { VaultConfig } from '../src/config';
+import { createApp } from '../src/app.js';
+import { VaultConfig } from '../src/config.js';
 import { MongoClient } from 'mongodb';
-import { mongoUri } from './mongo';
+import { mongoUri } from './mongo.js';
 
 export const token = 'test-only-token-aaaaaaaaaaaaaaaaaaaaaaaa';
 export const otherToken = 'test-only-token-bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -12,7 +12,7 @@ export const api = '?api-version=2025-07-01';
 export async function fixture() {
   const mongoDatabase = 'test_' + randomUUID().replaceAll('-', '');
   const config: VaultConfig = {
-    mongoUri, mongoDatabase, masterKey: randomBytes(32), baseUrl: 'http://127.0.0.1:4567',
+    mongoUri: `${mongoUri}/${mongoDatabase}`, masterKey: randomBytes(32), baseUrl: 'http://127.0.0.1:4000',
     grants: [
       { token, environment: 'dev', tenant: 'a', permissions: ['read', 'write', 'crypto'] },
       { token: otherToken, environment: 'dev', tenant: 'b', permissions: ['read', 'write', 'crypto'] },

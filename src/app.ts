@@ -10,6 +10,7 @@ import { Scope } from './types.js';
 import { scopePart } from './validation.js';
 import { VaultService } from './vault.js';
 import { ProvisioningService } from './provisioning.js';
+import { RuntimeManifestService } from './runtime-manifests.js';
 import { RuntimeSnapshotService } from './runtime-snapshot.js';
 import { ApiBearerAuth, ApiHeaders } from '@nestjs/swagger';
 import { InventoryQueries, isDocumentationRequest, setupSwagger, VaultEndpoint } from './swagger.js';
@@ -42,6 +43,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const audit = new AuditService(auditDestinations(config.audit), store);
   const vault = new VaultService(store, config.baseUrl.replace(/\/$/, ''));
   const provisioning = new ProvisioningService(vault);
+  const runtimeManifests = new RuntimeManifestService(store);
   const runtimeSnapshots = new RuntimeSnapshotService(vault);
   const keyTree = new TenantKeyTreeService(vault);
   const inventory = new InventoryService(vault, config.masterKey);
@@ -87,6 +89,12 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Runtime', 'Read a complete pinned runtime secret/key set atomically without provisioning', 'read', 'RuntimeSnapshot', 'RuntimeSnapshotRequest', true)
     @Post('local/runtime-snapshot') @HttpCode(200) @Permissions('read')
     runtimeSnapshot(@Req() req: ScopedRequest, @Body() body: unknown) { return runtimeSnapshots.snapshot(req.vaultScope, body); }
+    @VaultEndpoint('Runtime', 'Publish immutable runtime manifest metadata', 'write', 'RuntimeManifest', 'RuntimeManifest', true)
+    @Put('local/runtime-manifests/:application') @Permissions('write')
+    publishRuntimeManifest(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { return runtimeManifests.publish(req.vaultScope, application, body); }
+    @VaultEndpoint('Runtime', 'Read current or explicitly pinned runtime manifest metadata', 'read', 'RuntimeManifest', undefined, true)
+    @Get(['local/runtime-manifests/:application', 'local/runtime-manifests/:application/:revision']) @Permissions('read')
+    getRuntimeManifest(@Req() req: ScopedRequest, @Param('application') application: string, @Param('revision') revision?: string) { return runtimeManifests.get(req.vaultScope, application, revision); }
     @VaultEndpoint('Secrets', 'Set a secret and create a new version', 'write', 'SecretBundle', 'SetSecret')
     @Put('secrets/:name') @HttpCode(200)
     set(@Req() req: ScopedRequest, @Param('name') name: string, @Body() body: unknown) { return vault.create(req.vaultScope, 'secrets', name, body); }
@@ -142,7 +150,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     const ordinaryJson = json({ limit: '128kb', strict: true });
     const runtimeJson = json({ limit: '64kb', strict: true });
     app.use((req: Request, res: Response, next: NextFunction) => {
-      const runtimeRead = /^(?:\/namespaces\/[^/]+\/[^/]+)?\/local\/runtime-snapshot\/?$/i.test(req.path);
+      const runtimeRead = /^(?:\/namespaces\/[^/]+\/[^/]+)?\/local\/(?:runtime-snapshot|runtime-manifests\/[^/]+)\/?$/i.test(req.path);
       return (runtimeRead ? runtimeJson : ordinaryJson)(req, res, next);
     });
     app.useGlobalFilters(new SafeErrors());

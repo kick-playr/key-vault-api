@@ -1,3 +1,4 @@
+import type { RuntimeManifest } from '@kick-playr/local-key-vault/runtime-client';
 import type { JsonWebKey } from 'node:crypto';
 export interface Attributes { enabled: boolean; created: number; updated: number; nbf?: number; exp?: number; recoveryLevel: 'Purgeable' }
 export interface Version {
@@ -7,6 +8,7 @@ export interface Version {
 export interface Namespace {
   generation: number; keys: Record<string, Version[]>; secrets: Record<string, Version[]>;
   tombstones: string[];
+  runtimeManifests?: Record<string, { currentRevision: number; versions: Record<string, RuntimeManifest> }>;
   reconciliation?: { revision: number; digest: string; manifestDigest: string };
   audit: { time: number; action: string; name: string }[];
 }

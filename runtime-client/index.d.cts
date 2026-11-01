@@ -24,11 +24,16 @@ export interface RuntimeSnapshot {
   generation: number; loadedAt: number; keySets: RuntimeKeySet[];
   secrets: (SecretDescriptor & { value: string; attributes: Attributes })[];
 }
+export interface RuntimeManifest { schemaVersion: 1; application: string; scope: Scope; request: RuntimeSnapshotRequest; tenants: { tenant: string; bindingRevision: number; bindingDigest: string }[] }
+export interface RuntimeBindings { schemaVersion: 1; applications: Record<string, {scope: Scope; request: RuntimeSnapshotRequest}>; tenants: {scope: Scope; request: RuntimeSnapshotRequest}[] }
+export function parseRuntimeManifest(input: unknown): RuntimeManifest;
 export type Strategy = 'ENV_VARIABLES' | 'LOCAL_KEYVAULT';
 export interface ProcessPolicy { allowedMappings: readonly string[]; requiredMappings?: readonly string[] }
 export interface ProcessSecrets { strategy: Strategy; mappings: Readonly<Record<string, string>>; snapshot?: RuntimeSnapshot }
 export interface SecretsRuntime {
   load(scope: Scope, request: RuntimeSnapshotRequest): Promise<RuntimeSnapshot>;
+  loadApplication(application: string): Promise<{scope: Scope; request: RuntimeSnapshotRequest}>;
+  loadBindings(application: string): Promise<RuntimeBindings>;
   loadProcess(application: string, policy: ProcessPolicy): Promise<ProcessSecrets>;
   loadTenant(tenant: string, bindingRevision: number): Promise<RuntimeSnapshot>;
   close(): void;

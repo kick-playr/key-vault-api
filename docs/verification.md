@@ -1,5 +1,31 @@
 # APP-35 verification record
 
+## New tenant symmetric key creation
+
+Added executable create-tenant-keys.sh with offline --help/-h. Metadata and token support prompts or --environment/--tenant/--name/--token options. Omitted tenant is always prompted, never inferred from the key-set name. Key env names are automatic WORKFLOW_REAL_<TENANT>_{WRAPPING_KEY_V1,INDEX_KEY,CONTROL_KEY}. Per latest user correction, raw key-value flags are rejected: three key values come only from an explicitly selected --env-file or hidden prompts. Missing/blank dotenv entries prompt individually; files are parsed without execution or modification and never discovered automatically. Relative source paths use caller cwd; vault bootstrap .env resolves from the vault project. Only --generate explicitly generates random values and cannot combine with --env-file. Suffix-only confirmation requires yes unless explicit --yes approves automation.
+
+Supplied strings are preserved exactly and validated before confirmation. All writes use scoped read/write grant authorization and atomic create-only CAS checks; existing/deleted sets, races and unauthorized scopes cannot overwrite, rotate or reactivate keys. Full values are never printed or saved to files.
+
+Build, typecheck and **81 tests across 12 suites** passed. Nine creation tests cover automatic mappings, tenant prompting with other metadata provided, hidden value collection, explicit readonly dotenv input with missing/blank entries, rejected raw-key flags, generation, exact-value preservation, validation/cancellation/isolation and concurrent create-only fencing. Existing PTY checks cover hidden input, scope/name prompts and suffix confirmation. Independent review of the corrected file/manual input flow found no important defects. Shell syntax/help/whitespace checks passed. No live keys were created or imported, and no real FCRWW .env was read for this change.
+
+
+## Named tenant key sets and metadata tree
+
+The importer now asks for the logical key-set name before key values, validates `<profile>:<exact-selected-tenant>:key`, and confirms the chosen reference, namespace, exact env-name mappings and three-character suffixes. The canonical tree is environment / tenant / key set / wrapping/v1, index, control. Explicit env names remain WORKFLOW_REAL_FCRWW_WRAPPING_KEY_V1, WORKFLOW_REAL_FCRWW_INDEX_KEY and WORKFLOW_REAL_FCRWW_CONTROL_KEY regardless of profile name. Physical names use tk-role plus the full SHA-256 hash of environment, tenant, reference and role path. Metadata retains the logical path and env mapping. Existing values with conflicting mappings abort rather than being silently relabelled.
+
+Added list-protected GET /local/key-tree and namespace alias, with generated Swagger schema. It reads only the authorized namespace and projects logical groups, env names, physical/versioned secret IDs and attributes; no values, suffixes or key material. Invalid/unstructured tags are excluded; ordinary inventory remains available for legacy names. Disabled/expired current leaves remain visible; deleted leaves disappear. No automatic legacy rename, data migration or client-binding change occurs.
+
+Build, typecheck and **72 tests across 11 suites** passed. New tests cover deterministic scoped names, namespace/profile separation, wrong-tenant/invalid names, name prompts, exact role/env mappings, tree metadata omissions, list-only access, empty isolated tenant trees and namespace mismatch denial. A synthetic PTY check verified visible name entry, three exact env-name prompts with hidden values, logical confirmation paths and yes confirmation. Shell help/syntax/whitespace checks passed. Independent review found no important defects. No real keys were imported.
+
+
+## FCRWW symmetric key import
+
+Added `import-fcrww-keys.sh [environment tenant]` with offline --help/-h. Per user correction it prompts locally for wrapping, index and control key values with hidden terminal input, never reading FCRWW files or key environment variables. The grant token is also prompted unless exported as VAULT_TOKEN. Only the vault bootstrap .env is read. Non-interactive input is rejected; Ctrl+C/EOF cancels before import. A supplied token must have exact scoped read/write permissions, rechecked on every CAS retry. All three distinct canonical Base64 32-byte strings are stored unchanged in one atomic transaction as encrypted secrets. Identical active targets are skipped; conflicting/inactive/deleted targets abort all writes. Before import, validated keys display only their exact last three characters (including Base64 padding), followed by the target namespace and a required explicit yes confirmation. All other answers cancel before invoking import. No key generation/rotation or runtime binding changes occur; final output contains names/scope/counts only.
+
+Build, typecheck and **69 tests across 10 suites** passed. Independent review of the interactive revision found no important defects. Synthetic PTY checks verified all three interactive prompts, no echoed pasted values, and Ctrl+C cancellation. Shell syntax, offline help and whitespace checks passed. No real FCRWW keys were imported. Existing six import regressions cover original value preservation, metadata-only output, repeat/concurrent imports without new versions, validation before writes, least privilege and atomic conflict/disabled/deleted protection; a new test verifies three explicit prompt inputs independently of environment/file sources.
+
+Two additional regressions verify suffix-only confirmation, empty/no/y rejection without writes, and validation before displaying suffixes. A synthetic PTY check verified three-character suffix display, explicit yes and continued hiding of full key values.
+
 ## Grant token rotation
 
 Added executable `rotate.sh <grant-id>` and equivalent `grants.sh rotate <grant-id>`. Rotation atomically disables the original and persists a replacement token hash with a new ID, retaining the latest scope/permissions. The replacement token is printed once after commit. Revoked/unknown/invalid grants fail without changes or token output. Disabled originals are retained to prevent legacy import from resurrecting them. Concurrent rotations across MongoDB connections allow one replacement.

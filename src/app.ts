@@ -12,6 +12,7 @@ import { VaultService } from './vault.js';
 import { ProvisioningService } from './provisioning.js';
 import { ApiBearerAuth, ApiHeaders } from '@nestjs/swagger';
 import { InventoryQueries, isDocumentationRequest, setupSwagger, VaultEndpoint } from './swagger.js';
+import { TenantKeyTreeService } from './tenant-key-tree.js';
 import { InventoryService } from './inventory.js';
 
 type ScopedRequest = Request & { vaultScope: Scope };
@@ -38,6 +39,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const grants = new GrantService(store);
   const vault = new VaultService(store, config.baseUrl.replace(/\/$/, ''));
   const provisioning = new ProvisioningService(vault);
+  const keyTree = new TenantKeyTreeService(vault);
   const inventory = new InventoryService(vault, config.masterKey);
   class HandlerPermissions implements CanActivate {
     async canActivate(context: ExecutionContext) {
@@ -60,6 +62,9 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Connection', 'Validate the exact caller token for this namespace without reading resources', 'valid scoped grant', 'Session', undefined, true)
     @Get('local/session') @Permissions()
     session(@Req() req: ScopedRequest) { return { authenticated: true, environment: req.vaultScope.environment, tenant: req.vaultScope.tenant }; }
+    @VaultEndpoint('Inventory', 'Browse tenant key sets and roles as a metadata-only tree', 'list', 'TenantKeyTree', undefined, true)
+    @Get('local/key-tree') @Permissions('list')
+    tree(@Req() req: ScopedRequest) { return keyTree.tree(req.vaultScope); }
     @VaultEndpoint('Inventory', 'List latest key metadata without key material', 'list', 'KeyInventory')
     @InventoryQueries() @Get('keys') @Permissions('list')
     listKeys(@Req() req: ScopedRequest, @Query() query: unknown) { return inventory.list(req.vaultScope, 'keys', query); }

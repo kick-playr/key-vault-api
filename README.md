@@ -32,7 +32,7 @@ Supply the following bootstrap values:
 | `VAULT_MONGODB_URI` | yes | Complete connection URL, e.g. `mongodb://127.0.0.1:27017/key-vault` |
 | `VAULT_BASE_URL` | no | Default `http://127.0.0.1:4000`; only loopback HTTP is accepted |
 
-Every shell script supports `--help` (or `-h`) with its own usage, arguments and examples, without compiling or connecting to MongoDB: `./create-key.sh --help`, `./create-grants.sh --help`, `./migrate-grants.sh --help`, `./rotate.sh --help`, and `./grants.sh --help`.
+Every shell script supports `--help` (or `-h`) with its own usage, arguments and examples, without compiling or connecting to MongoDB: `./create-key.sh --help`, `./create-grants.sh --help`, `./migrate-grants.sh --help`, `./rotate.sh --help`, `./grants.sh --help`, `./import-fcrww-keys.sh --help`, and `./create-tenant-keys.sh --help`.
 
 Create the first persisted grant (MongoDB must be running):
 
@@ -101,6 +101,71 @@ The server keeps no plaintext namespace cache: reads and cryptographic operation
 A namespace is limited to **8 MiB of serialized plaintext** (including retained versions and metadata), leaving room for base64 encoding below MongoDB's 16 MiB BSON document limit. Oversized writes fail atomically with `507 NamespaceTooLarge`; previous data remains intact. This bounded, per-namespace model keeps complete provisioning atomic on standalone local MongoDB. It is not intended for unlimited secret-version history or bulk data storage. Back up MongoDB and the master key separately. Ciphertext does not provide protection from rollback of a complete database backup; there is no external anti-rollback ledger or automatic master-key rotation.
 
 The former file backend is removed. Existing `.vault` files are left untouched and are **not imported automatically**. If you already provisioned local keys, retain the old encrypted store and master key until an explicit migration is designed; starting with a new empty MongoDB database creates new keys and cannot decrypt data tied to the old keys. No migration was performed by this change.
+
+## Tenant key naming and tree
+
+Every key set belongs to the exact authorized environment/tenant namespace. Its logical reference is `<profile>:<tenant>:key`, for example `workflow-local:fcrww:key`. Profiles use lowercase kebab-case (at most 48 characters); the tenant must match the selected grant scope exactly. Profile and environment are separate: the logical profile name does not infer a deployment environment or the source variable prefix.
+
+```text
+development/
+└── fcrww/
+    └── workflow-local:fcrww:key/
+        ├── wrapping/
+        │   └── v1  -> WORKFLOW_REAL_FCRWW_WRAPPING_KEY_V1
+        ├── index   -> WORKFLOW_REAL_FCRWW_INDEX_KEY
+        └── control -> WORKFLOW_REAL_FCRWW_CONTROL_KEY
+```
+
+Each leaf is an encrypted secret with a deterministic Azure-compatible physical name `tk-<role>-<sha256>`. The full hash includes environment, tenant, logical key-set reference and role path, preventing collisions caused by replacing colons/slashes with hyphens. Tags retain `keySet`, `keyProfile`, `keyRole`, `logicalPath`, `envName`, `purpose` and `source`. The explicit environment-variable mapping is preserved exactly; `workflow-local` does not rename the provided `WORKFLOW_REAL_...` variables. `wrapping/v1` is the supplied wrapping-key generation; the vault also maintains its own immutable version IDs. Index/control names stay stable.
+
+`GET /local/key-tree` (and its namespace alias) returns the selected tenant tree under the separate `list` permission. Leaves include env names, physical names, versioned IDs and attributes, never values or key material. Disabled/expired leaves remain visible for auditing; permanently deleted leaves disappear. Other namespaces are not queried. Legacy unstructured secrets remain accessible by their existing names and ordinary inventory; they are not silently renamed or assigned to a key set. Re-import into the chosen named set is explicit and never deletes legacy records. No runtime binding changes happen automatically.
+
+## Create a new tenant key set
+
+```sh
+./create-tenant-keys.sh
+```
+
+The script prompts for the **environment, tenant and key-set name** when they are not supplied as parameters. It prompts privately for the grant token unless `VAULT_TOKEN` or `--token` supplies it. Key names are automatic: `WORKFLOW_REAL_<TENANT>_WRAPPING_KEY_V1`, `WORKFLOW_REAL_<TENANT>_INDEX_KEY`, and `WORKFLOW_REAL_<TENANT>_CONTROL_KEY` (uppercase tenant, hyphens replaced by underscores).
+
+For the three key values, choose either hidden prompts (default) or an explicitly selected dotenv file:
+
+```sh
+# Ask for environment, tenant, key-set name and hidden key values.
+./create-tenant-keys.sh
+
+# Read matching keys from this file; still ask for tenant and other metadata.
+# Missing/blank key entries are prompted privately.
+./create-tenant-keys.sh --env-file /path/to/source.env
+
+# Optionally provide non-secret metadata as parameters instead of prompting.
+./create-tenant-keys.sh --environment development --tenant fcrww \
+  --name workflow-local:fcrww:key --env-file /path/to/source.env
+```
+
+Relative source paths resolve from the caller's working directory. The selected source dotenv is parsed without execution and never modified; no FCRWW file is discovered automatically, and key values are not taken from exported variables. Raw key-value command-line options are rejected. Complete supplied strings are preserved exactly and must be distinct canonical Base64-encoded 32-byte values. Before writes, the script displays only each last three characters and the exact logical reference/namespace/mappings, then requires `yes`. Other responses, Ctrl+C or EOF cancel.
+
+`--generate` explicitly generates three fresh random 256-bit keys instead of file/manual input; it cannot be combined with `--env-file`. `--yes` explicitly pre-approves the final confirmation while retaining the suffix preview. Fully non-interactive use needs all metadata, a grant token, a complete `--env-file` (or `--generate`) and `--yes`.
+
+The grant requires exact scoped `read` and `write`. All three writes are atomic and create-only: existing/deleted sets and concurrent races cannot overwrite, rotate or reactivate keys. No full values are printed or written to plaintext files. The vault project bootstrap `.env` supplies MongoDB/master-key configuration even when invoked from another directory, with exported bootstrap variables taking precedence. The API can remain stopped. View metadata via `/local/key-tree` with `list` permission; runtime bindings are not changed automatically. Run `./create-tenant-keys.sh --help` for all options.
+
+## Import existing FCRWW encryption keys
+
+`import-fcrww-keys.sh` asks for a key-set name and the three existing canonical Base64-encoded 32-byte symmetric key values. It never reads the FCRWW `.env`. The role/environment-name mappings are shown in the tree above.
+
+Use an existing grant token with **read and write** for the exact target namespace. For FCRWW the defaults are environment `development`, tenant `fcrww`. Other permissions can remain on the grant; `crypto` is not required to import raw symmetric key strings as secrets.
+
+```sh
+./import-fcrww-keys.sh development fcrww
+```
+
+Enter the grant bearer token, then the key-set name `workflow-local:fcrww:key`, wrapping key, index key and control key when prompted. Input is hidden; paste only each raw value without quotes or variable assignments. Before import, the script shows the last three characters of each validated key (including Base64 padding) and the target namespace. Type `yes` to proceed; any other answer cancels without importing. An exported `VAULT_TOKEN` skips the token prompt. Keys are always entered interactively, never read from files or environment variables. Ctrl+C or EOF cancels without importing keys; an interactive terminal is required.
+
+The script connects directly to MongoDB using the vault project's `VAULT_MONGODB_URI` and `VAULT_MASTER_KEY`, so the API can remain stopped. It compiles current sources first. Only the vault bootstrap `.env` is read; exported bootstrap variables take precedence.
+
+The grant is checked on every atomic-write attempt. All three entered keys must be present, valid and distinct. Original strings are preserved without key generation or rotation. All three secrets commit in one namespace transaction: identical existing active values are skipped, while conflicting values or inactive/deleted targets abort the whole import. Repeating or concurrently repeating the same import does not generate new secret versions. The confirmation displays only the final three characters per key; final output contains namespace, names and imported/skipped counts. Full key values, token hashes and bearer tokens are never printed.
+
+This imports storage only. Keep the source `.env` keys until Kick-Playr's runtime bindings are explicitly changed and verified to load the vault secrets. Its current `env:` references do not switch automatically. The import does not modify source files or Kick-Playr configuration. Run `./import-fcrww-keys.sh --help` for standalone usage.
 
 ## Swagger documentation
 

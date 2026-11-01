@@ -11,6 +11,8 @@ const entry = {
 };
 const obj = (properties: SchemaObject['properties'], required: string[] = []): SchemaObject => ({ type: 'object', additionalProperties: false, properties, ...(required.length ? { required } : {}) });
 export const schemas: Record<string, SchemaObject> = {
+  KeyTreeNode: obj({ name: text, children: { type: 'array', items: ref('KeyTreeNode') }, envName: text, secretName: text, id: { type: 'string', format: 'uri' }, version: text, versionId: { type: 'string', format: 'uri' }, attributes: ref('Attributes') }, ['name']),
+  TenantKeyTree: obj({ environment: text, tenant: text, keySets: { type: 'array', items: obj({ name: text, profile: text, children: { type: 'array', items: ref('KeyTreeNode') } }, ['name', 'profile', 'children']) } }, ['environment', 'tenant', 'keySets']),
   Session: obj({ authenticated: { type: 'boolean', enum: [true] }, environment: text, tenant: text }, ['authenticated', 'environment', 'tenant']),
   InputAttributes: obj({ enabled: { type: 'boolean', default: true }, nbf: { type: 'integer', minimum: 0, description: 'Not-before epoch seconds.' }, exp: { type: 'integer', minimum: 0, description: 'Expiry epoch seconds; must be after nbf.' } }),
   Attributes: { type: 'object', properties: { enabled: { type: 'boolean' }, nbf: { type: 'integer' }, exp: { type: 'integer' }, created: { type: 'integer' }, updated: { type: 'integer' }, recoveryLevel: { type: 'string', enum: ['Purgeable'] } }, required: ['enabled', 'created', 'updated', 'recoveryLevel'] },

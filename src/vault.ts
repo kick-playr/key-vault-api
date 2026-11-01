@@ -1,7 +1,7 @@
 import { createPrivateKey, createPublicKey, generateKeyPair, privateDecrypt, publicEncrypt, randomUUID, constants } from 'node:crypto';
 import { promisify } from 'node:util';
-import { EncryptedStore } from './store';
-import { Attributes, Namespace, Scope, Version, namespace, scopeId } from './types';
+import { MongoStore } from './store';
+import { Attributes, Namespace, Scope, Version } from './types';
 import { fail, requireCondition as check } from './errors';
 import { attributes, identifier, object, tags } from './validation';
 
@@ -53,7 +53,7 @@ export function newSecret(input: unknown): Version {
 }
 
 export class VaultService {
-  constructor(readonly store: EncryptedStore, readonly baseUrl: string) {}
+  constructor(readonly store: MongoStore, readonly baseUrl: string) {}
   id(scope: Scope, kind: Kind, name: string, version: string) {
     return `${this.baseUrl}/namespaces/${scope.environment}/${scope.tenant}/${kind}/${name}/${version}`;
   }
@@ -66,9 +66,8 @@ export class VaultService {
   }
   async create(scope: Scope, kind: Kind, name: string, body: unknown) {
     identifier(name);
-    // Generate inside the transaction so rotation and provisioning cannot interleave.
-    return this.store.transaction(async state => {
-      const ns = namespace(state, scope);
+    // Generation may be retried on a concurrent namespace revision conflict.
+    return this.store.transaction(scope, async ns => {
       const item = kind === 'keys' ? await newKey(body) : newSecret(body);
       const versions = Object.hasOwn(ns[kind], name) ? ns[kind][name]! : [];
       versions.push(item); ns[kind][name] = versions;
@@ -78,14 +77,14 @@ export class VaultService {
     });
   }
   get(scope: Scope, kind: Kind, name: string, version?: string) {
-    return this.store.read(state => {
-      const item = find(state.namespaces[scopeId(scope)], kind, name, version); active(item);
+    return this.store.read(scope, ns => {
+      const item = find(ns, kind, name, version); active(item);
       return this.bundle(scope, kind, name, item);
     });
   }
   versions(scope: Scope, kind: Kind, name: string) {
-    return this.store.read(state => {
-      const ns = state.namespaces[scopeId(scope)]; find(ns, kind, name);
+    return this.store.read(scope, ns => {
+      find(ns, kind, name);
       return { value: ns![kind][name]!.map(item => this.bundle(scope, kind, name, item, true)) };
     });
   }
@@ -93,8 +92,8 @@ export class VaultService {
     const body = object(input, kind === 'keys' ? ['attributes', 'tags', 'key_ops'] : ['attributes', 'tags', 'contentType']);
     const attr = attributes(body.attributes), tag = tags(body.tags);
     if (body.contentType !== undefined) check(typeof body.contentType === 'string' && body.contentType.length <= 255);
-    return this.store.transaction(state => {
-      const ns = namespace(state, scope), item = find(ns, kind, name, version);
+    return this.store.transaction(scope, ns => {
+      const item = find(ns, kind, name, version);
       if (body.key_ops !== undefined) {
         const parsed = keyInput({ kty: 'RSA', key_ops: body.key_ops }); item.keyOps = parsed.ops;
       }
@@ -108,8 +107,8 @@ export class VaultService {
     });
   }
   async delete(scope: Scope, kind: Kind, name: string) {
-    return this.store.transaction(state => {
-      const ns = namespace(state, scope), item = find(ns, kind, name);
+    return this.store.transaction(scope, ns => {
+      const item = find(ns, kind, name);
       const result = this.bundle(scope, kind, name, item, true);
       delete ns[kind][name]; ns.tombstones.push(`${kind}/${name}`); changed(ns, 'delete:' + kind, name);
       return result;
@@ -119,8 +118,8 @@ export class VaultService {
     const body = object(input, ['alg', 'value']);
     check(body.alg === 'RSA-OAEP-256' && typeof body.value === 'string' && /^[A-Za-z0-9_-]*$/.test(body.value) && body.value.length <= 8192);
     const value = Buffer.from(body.value, 'base64url'); check(value.toString('base64url') === body.value);
-    return this.store.read(state => {
-      const item = find(state.namespaces[scopeId(scope)], 'keys', name, version); active(item);
+    return this.store.read(scope, ns => {
+      const item = find(ns, 'keys', name, version); active(item);
       if (!item.keyOps?.includes(operation)) fail(403, 'Forbidden');
       try {
         const options = { padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' };

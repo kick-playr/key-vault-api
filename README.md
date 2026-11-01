@@ -1,10 +1,10 @@
 # Local Key Vault
 
-NestJS/TypeScript implementation of APP-35 for **local development**. It provisions manifest-defined keys with deterministic names, stores supplied secrets in an encrypted file, and loads tenant-scoped runtime snapshots. No secret copying into application `.env` files is needed after initial provisioning. This repository was empty; existing application/tenant lifecycle integrations are supplied as an integration contract below, not changes to another application's code.
+NestJS/TypeScript implementation of APP-35 for **local development**. It provisions manifest-defined keys with deterministic names, stores supplied secrets in encrypted MongoDB documents, and loads tenant-scoped runtime snapshots. No secret copying into application `.env` files is needed after initial provisioning. This repository was empty; existing application/tenant lifecycle integrations are supplied as an integration contract below, not changes to another application's code.
 
 ## Run
 
-Use Node.js 22 or newer and npm. Install and verify:
+Use Node.js 22 or newer, npm, and MongoDB 7 or 8. Tests require a local `mongod` executable (or `MONGOD_BINARY` pointing to one); they launch disposable loopback databases and never use your configured MongoDB URI. Install and verify:
 
 ```sh
 npm ci
@@ -18,7 +18,8 @@ Supply bootstrap configuration through your shell, OS credential manager, or dev
 | --- | --- | --- |
 | `VAULT_MASTER_KEY` | yes | Base64 encoding of exactly 32 random bytes, kept outside the store |
 | `VAULT_GRANTS` | yes | JSON array of caller grants, shown below |
-| `VAULT_STORE_PATH` | no | Default `.vault/store.vault`; use a dedicated private directory |
+| `VAULT_MONGODB_URI` | yes | MongoDB connection URI, including authentication/TLS options appropriate to your database |
+| `VAULT_MONGODB_DATABASE` | no | Default `local_key_vault`; explicit database name, independent of the URI path |
 | `VAULT_BASE_URL` | no | Default `http://127.0.0.1:4567`; only loopback HTTP is accepted |
 
 The following is a **configuration shape**, not usable credentials. Generate the master key and separate caller tokens with a cryptographically secure credential source; retain them securely across restarts. The service intentionally does not invent or print bootstrap credentials.
@@ -38,9 +39,27 @@ The following is a **configuration shape**, not usable credentials. Generate the
 npm start
 ```
 
-The process binds to `127.0.0.1`. Store directories must be owned by the process user and mode `0700`; existing store files must be mode `0600`, owned by that user, regular files with one hard link. New directories/files get those modes. Final directory/file symlinks are rejected. Use a trusted local filesystem and trusted parent directories. Do not place the store in a synchronized, shared or network directory. The master key and grants cannot be retrieved from this vault: this avoids circular bootstrap dependencies.
+The vault HTTP process binds to `127.0.0.1`. MongoDB must already be available; startup checks its connection and an encrypted master-key verifier before accepting requests. Keep MongoDB credentials and the master key outside the database and outside source control. Configure a dedicated database/user with read/write access to `vault_metadata` and `vault_namespaces`; never grant callers direct database access. Use authentication and TLS for non-loopback MongoDB connections.
 
-A lifetime `<store>.lock` prevents competing server processes. Clean shutdown releases it. After a crash, confirm the recorded PID is no longer running before manually removing the stale lock. Never delete an active process's lock. Ciphertext is AES-256-GCM with a fresh nonce per commit and authenticated format marker. Commits serialize, fsync a temporary ciphertext file and atomically rename it before publishing memory. This does not promise crash consistency on every filesystem or power-loss durability of directory entries; retain encrypted backups and the master key separately. Master-key rotation/recovery tooling is outside this subset.
+For an optional local MongoDB container, provide `VAULT_MONGODB_PASSWORD` through your launcher, then run:
+
+```sh
+docker compose up -d mongodb
+```
+
+Set `VAULT_MONGODB_URI` to `mongodb://vault:<URL-encoded-password>@127.0.0.1:27017/?authSource=admin` before starting the Nest server. Compose binds MongoDB to loopback, enables password authentication and persists data in a named volume. Its root account is a local bootstrap convenience; use a database-specific account for shared installations. Changing the Compose password variable after volume initialization does not rotate an existing MongoDB user's password.
+
+### MongoDB persistence and concurrency
+
+The official MongoDB Node driver stores each tenant/environment namespace as one AES-256-GCM-encrypted document in `vault_namespaces`. Keys, secrets, versions, audit metadata, tombstones and reconciliation revisions remain inside the ciphertext. The only visible fields are a hashed namespace `_id`, format/storage revision, nonce, authentication tag and ciphertext. A separate encrypted verifier in `vault_metadata` rejects a wrong master key at startup; corruption of namespace ciphertext fails safely when that namespace is accessed. Nonces are fresh for every commit. Authentication binds ciphertext to both namespace ID and storage revision, preventing swapping documents or editing revision headers.
+
+Each complete namespace mutation uses MongoDB's atomic single-document insert or conditional replacement. The update filter includes the previous storage revision; concurrent writers reload and retry conflicts up to 20 times, then return `409 StorageConflict`. This follows MongoDB's [atomic update guidance](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/). No replica-set transaction or file lock is needed. Reads use the primary with majority read concern; writes require majority acknowledgement with a 5-second write-concern timeout. Driver connection/server-selection timeouts are 3 seconds and socket timeout is 5 seconds. Multiple vault instances must use the same database, master key, grants and canonical base URL.
+
+The server keeps no plaintext namespace cache: reads and cryptographic operations reload current committed MongoDB state, so another server's rotation/revocation is visible without restarting. Runtime consumers still have the bounded snapshot cache described below. Database failures return safe `503 StoreUnavailable` errors without connection strings or driver diagnostics. A write timeout may mean the database committed but acknowledgement was lost; idempotent reconciliation can retry its original event payload safely. Raw key create/secret set requests retain their normal new-version semantics.
+
+A namespace is limited to **8 MiB of serialized plaintext** (including retained versions and metadata), leaving room for base64 encoding below MongoDB's 16 MiB BSON document limit. Oversized writes fail atomically with `507 NamespaceTooLarge`; previous data remains intact. This bounded, per-namespace model keeps complete provisioning atomic on standalone local MongoDB. It is not intended for unlimited secret-version history or bulk data storage. Back up MongoDB and the master key separately. Ciphertext does not provide protection from rollback of a complete database backup; there is no external anti-rollback ledger or automatic master-key rotation.
+
+The former file backend is removed. Existing `.vault` files are left untouched and are **not imported automatically**. If you already provisioned local keys, retain the old encrypted store and master key until an explicit migration is designed; starting with a new empty MongoDB database creates new keys and cannot decrypt data tied to the old keys. No migration was performed by this change.
 
 ## Callers and namespaces
 
@@ -119,7 +138,7 @@ Tenant calls never modify `process.env`. Snapshots are complete and frozen, keye
 
 For legacy process-only clients, `await runtime.initializeProcess(environment, processManifest, revision, suppliedSecrets)` only accepts `process` entries in reserved `_shared`. It validates all mappings before any writes, refuses conflicting existing values and will not silently overwrite on rotation. Existing identical values are allowed. Public frontend prefixes, `NODE_*`, `NPM_*`, `VAULT_*` and dangerous runtime/loader names are rejected. Application-selected mappings must still be reviewed for their own side effects. The service and library never emit values into frontend bundles; already bundled frontend configuration cannot be refreshed this way.
 
-The default maximum snapshot age is **30 seconds** (callers can shorten it). `get` fails once expired. Refresh failures immediately invalidate that namespace: there is no stale fallback. Fetches time out after 5 seconds; retries are explicit, bounded by the consumer, using the same event revision/payload. `get` is unavailable while a refresh is in flight. Already obtained references cannot be remotely erased: consumers must stop using old clients/snapshots when they expire, a refresh fails or a tenant becomes unready. Revocation is observed on refresh/expiry, at most TTL for cooperating consumers; there is no distributed push invalidation. Each cryptographic operation independently checks current key status.
+The default maximum snapshot age is **30 seconds** (callers can shorten it). `get` fails once expired. Refresh failures immediately invalidate that namespace: there is no stale fallback. Fetches time out after 5 seconds; retries are explicit, bounded by the consumer, using the same event revision/payload. `get` is unavailable while a refresh is in flight. Already obtained references cannot be remotely erased: consumers must stop using old clients/snapshots when they expire, a refresh fails or a tenant becomes unready. Revocation is observed on refresh/expiry, at most TTL for cooperating consumers; there is no distributed push invalidation. Each cryptographic operation reads current MongoDB state and independently checks key status.
 
 ## Supported Azure contract
 
@@ -147,4 +166,4 @@ Explicit key create / secret set creates a new version; retain old version IDs a
 
 This subset does not implement soft deletion, recovery, purge, certificates, key import/export, symmetric/HSM keys, signing, backup/restore, rotation policies, list-all endpoints, pagination, Entra ID, TLS or comprehensive Azure SDK compatibility. Version lists return the complete local list without pagination. Metadata/delete responses and namespace-bearing IDs are explicitly limited local semantics. Use the narrow REST surface described here; do not treat this service as a drop-in replacement for the entire Azure service.
 
-It is not an HSM or production security boundary. Local administrators/processes able to read bootstrap credentials can access the store. There is no live key generation, migration of existing secrets, credential change or deployment performed as part of this implementation. Freddie/Chris approval referenced by APP-35 is not implied by these tests or this code.
+It is not an HSM or production security boundary. Local administrators/processes able to read bootstrap credentials can access the database contents. There is no live key generation, migration of existing secrets, credential change or deployment performed as part of this implementation. Freddie/Chris approval referenced by APP-35 is not implied by these tests or this code.

@@ -1,94 +1,109 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { constants } from 'node:fs';
-import { FileHandle, lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { Collection, MongoClient, MongoServerError } from 'mongodb';
 import { fail } from './errors';
-import { StoreState } from './types';
+import { emptyNamespace, Namespace, Scope, scopeId } from './types';
+import { scopePart } from './validation';
 
-export interface StoreConfig { path: string; masterKey: Buffer }
-export class EncryptedStore {
-  private state: StoreState = { schema: 1, namespaces: {} };
-  private queue: Promise<unknown> = Promise.resolve();
+export interface StoreConfig { mongoUri: string; mongoDatabase: string; masterKey: Buffer }
+interface Envelope { _id: string; schema: 1; revision: number; iv: string; tag: string; data: string }
+const MAX_PLAINTEXT_BYTES = 8 * 1024 * 1024;
+const duplicate = (e: unknown) => e instanceof MongoServerError && e.code === 11000;
+
+/** Namespace callbacks may be retried after a CAS conflict; keep them free of external side effects. */
+export class MongoStore {
   private closed = false;
-  private lock?: FileHandle;
-  private constructor(private readonly config: StoreConfig) {}
-
-  static async open(config: StoreConfig): Promise<EncryptedStore> {
-    if (config.masterKey.length !== 32) fail(500, 'InvalidBootstrap');
-    const store = new EncryptedStore({ path: resolve(config.path), masterKey: Buffer.from(config.masterKey) });
-    let locked = false;
+  private readonly queues = new Map<string, Promise<unknown>>();
+  private readonly collection: Collection<Envelope>;
+  private constructor(private readonly client: MongoClient, private readonly config: StoreConfig) {
+    this.collection = client.db(config.mongoDatabase).collection<Envelope>('vault_namespaces');
+  }
+  static async open(config: StoreConfig): Promise<MongoStore> {
+    if (!Buffer.isBuffer(config.masterKey) || config.masterKey.length !== 32 ||
+        !/^mongodb(?:\+srv)?:\/\/\S+$/.test(config.mongoUri) || !/^[a-zA-Z][a-zA-Z0-9_-]{0,62}$/.test(config.mongoDatabase)) fail(500, 'InvalidBootstrap');
+    let client: MongoClient | undefined;
+    const copy = { ...config, masterKey: Buffer.from(config.masterKey) };
     try {
-      const dir = dirname(store.config.path);
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      const ds = await lstat(dir);
-      if (!ds.isDirectory() || ds.isSymbolicLink() || (ds.mode & 0o077) !== 0 ||
-          (process.getuid && ds.uid !== process.getuid())) fail(500, 'UnsafeStorePath');
-      try { store.lock = await open(store.config.path + '.lock', 'wx', 0o600); locked = true; }
-      catch (e) { if ((e as NodeJS.ErrnoException).code === 'EEXIST') fail(503, 'StoreLocked'); throw e; }
-      await store.lock.writeFile(String(process.pid)); await store.lock.sync();
-      try {
-        const st = await lstat(store.config.path);
-        if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || (st.mode & 0o077) !== 0 ||
-            (process.getuid && st.uid !== process.getuid())) fail(500, 'UnsafeStorePath');
-        const envelope = JSON.parse(await readFile(store.config.path, 'utf8'));
-        if (envelope.schema !== 1) throw new Error();
-        const decipher = createDecipheriv('aes-256-gcm', store.config.masterKey, Buffer.from(envelope.iv, 'base64'));
-        decipher.setAAD(Buffer.from('local-vault-v1'));
-        decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
-        const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]);
-        const state = JSON.parse(plaintext.toString('utf8'));
-        if (state.schema !== 1 || !state.namespaces || typeof state.namespaces !== 'object') throw new Error();
-        store.state = state;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-        await store.persist(store.state);
+      client = new MongoClient(config.mongoUri, {
+        serverSelectionTimeoutMS: 3000, connectTimeoutMS: 3000, socketTimeoutMS: 5000,
+        readPreference: 'primary', readConcern: { level: 'majority' },
+        writeConcern: { w: 'majority', wtimeoutMS: 5000 }, retryWrites: false,
+      });
+      await client.connect();
+      const store = new MongoStore(client, copy);
+      // Shared encrypted key verifier; unique _id makes simultaneous first starts safe.
+      const metadata = client.db(config.mongoDatabase).collection<Envelope>('vault_metadata');
+      let marker = await metadata.findOne({ _id: 'master-key-check' });
+      if (!marker) {
+        const candidate = store.encode('master-key-check', 0, { marker: 'local-vault-key-check-v1' });
+        try { await metadata.insertOne(candidate); } catch (e) { if (!duplicate(e)) throw e; }
+        marker = await metadata.findOne({ _id: 'master-key-check' });
       }
+      if (!marker || (store.decode(marker) as { marker?: string }).marker !== 'local-vault-key-check-v1') throw new Error();
       return store;
-    } catch (e) {
-      if (locked) { await store.lock?.close(); await unlink(store.config.path + '.lock').catch(() => undefined); }
-      store.config.masterKey.fill(0);
-      if (e instanceof Error && ['StoreLocked', 'UnsafeStorePath'].includes(e.message)) throw e;
-      fail(503, 'StoreUnavailable');
+    } catch {
+      await client?.close().catch(() => undefined); copy.masterKey.fill(0); fail(503, 'StoreUnavailable');
     }
   }
-
-  read<T>(fn: (state: StoreState) => T): T {
-    if (this.closed) fail(503, 'StoreUnavailable');
-    return structuredClone(fn(structuredClone(this.state)));
+  private id(scope: Scope) {
+    scopePart(scope.environment); scopePart(scope.tenant);
+    return createHash('sha256').update(scopeId(scope)).digest('hex');
   }
-
-  transaction<T>(fn: (state: StoreState) => T | Promise<T>): Promise<T> {
-    const operation = this.queue.then(async () => {
-      if (this.closed) fail(503, 'StoreUnavailable');
-      const draft = structuredClone(this.state);
-      const result = await fn(draft);
-      try { await this.persist(draft); } catch { fail(503, 'StoreUnavailable'); }
-      this.state = draft;
-      return structuredClone(result);
+  private encode(id: string, revision: number, value: unknown): Envelope {
+    const plaintext = Buffer.from(JSON.stringify(value));
+    if (plaintext.length > MAX_PLAINTEXT_BYTES) fail(507, 'NamespaceTooLarge');
+    const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.config.masterKey, iv);
+    cipher.setAAD(Buffer.from(JSON.stringify(['mongodb-vault-v1', id, revision])));
+    const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return { _id: id, schema: 1, revision, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') };
+  }
+  private decode(envelope: Envelope): unknown {
+    try {
+      if (envelope.schema !== 1 || !Number.isSafeInteger(envelope.revision) || envelope.revision < 0) throw new Error();
+      const decipher = createDecipheriv('aes-256-gcm', this.config.masterKey, Buffer.from(envelope.iv, 'base64'));
+      decipher.setAAD(Buffer.from(JSON.stringify(['mongodb-vault-v1', envelope._id, envelope.revision])));
+      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+      return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]).toString('utf8'));
+    } catch { fail(503, 'StoreUnavailable'); }
+  }
+  private async fetch(id: string): Promise<Envelope | null> {
+    if (this.closed) fail(503, 'StoreUnavailable');
+    try { return await this.collection.findOne({ _id: id }); } catch { fail(503, 'StoreUnavailable'); }
+  }
+  async read<T>(scope: Scope, fn: (namespace: Namespace | undefined) => T): Promise<T> {
+    const envelope = await this.fetch(this.id(scope));
+    const ns = envelope ? this.decode(envelope) as Namespace : undefined;
+    return structuredClone(fn(ns));
+  }
+  transaction<T>(scope: Scope, fn: (namespace: Namespace) => T | Promise<T>): Promise<T> {
+    const id = this.id(scope);
+    const operation = (this.queues.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const current = await this.fetch(id);
+        const ns = current ? this.decode(current) as Namespace : emptyNamespace();
+        const result = await fn(ns);
+        const revision = (current?.revision ?? 0) + 1;
+        if (!Number.isSafeInteger(revision)) fail(503, 'StoreUnavailable');
+        const next = this.encode(id, revision, ns);
+        try {
+          if (current) {
+            const written = await this.collection.replaceOne({ _id: id, revision: current.revision }, next);
+            if (written.matchedCount !== 1) continue;
+          } else {
+            try { await this.collection.insertOne(next); } catch (e) { if (duplicate(e)) continue; throw e; }
+          }
+          return structuredClone(result);
+        } catch { fail(503, 'StoreUnavailable'); }
+      }
+      fail(409, 'StorageConflict');
     });
-    this.queue = operation.catch(() => undefined);
+    this.queues.set(id, operation);
+    void operation.finally(() => { if (this.queues.get(id) === operation) this.queues.delete(id); }).catch(() => undefined);
     return operation;
   }
-
-  private async persist(state: StoreState) {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.config.masterKey, iv);
-    cipher.setAAD(Buffer.from('local-vault-v1'));
-    const data = Buffer.concat([cipher.update(JSON.stringify(state), 'utf8'), cipher.final()]);
-    const envelope = JSON.stringify({ schema: 1, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') });
-    const temporary = this.config.path + '.' + randomBytes(12).toString('hex') + '.tmp';
-    let handle: FileHandle | undefined;
-    try {
-      handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-      await handle.writeFile(envelope); await handle.sync(); await handle.close(); handle = undefined;
-      await rename(temporary, this.config.path);
-    } finally { await handle?.close(); await unlink(temporary).catch(() => undefined); }
-  }
-
   async close() {
-    await this.queue;
     if (this.closed) return;
     this.closed = true;
-    await this.lock?.close(); await unlink(this.config.path + '.lock'); this.config.masterKey.fill(0);
+    await Promise.allSettled([...this.queues.values()]);
+    await this.client.close(); this.config.masterKey.fill(0);
   }
 }

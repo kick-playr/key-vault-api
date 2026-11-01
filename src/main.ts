@@ -9,4 +9,4 @@ async function main() {
   catch { await app.close(); throw new Error('StartupFailed'); }
   process.stdout.write('Local vault ready on loopback\n');
 }
-void main().catch(() => { process.stderr.write('Vault startup failed; check bootstrap, store permissions and lock ownership.\n'); process.exitCode = 1; });
+void main().catch(() => { process.stderr.write('Vault startup failed; check bootstrap, MongoDB availability and credentials.\n'); process.exitCode = 1; });

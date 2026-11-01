@@ -4,7 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { NextFunction, Request, Response, json } from 'express';
 import { authorize, Permission, validateConfig, VaultConfig } from './config';
 import { VaultError, fail } from './errors';
-import { EncryptedStore } from './store';
+import { MongoStore } from './store';
 import { Scope } from './types';
 import { scopePart } from './validation';
 import { VaultService } from './vault';
@@ -30,7 +30,7 @@ class SafeErrors implements ExceptionFilter {
 // Closure-backed providers keep bootstrap credentials out of Nest metadata/logs.
 export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const config = validateConfig(input);
-  const store = await EncryptedStore.open(config);
+  const store = await MongoStore.open(config);
   const vault = new VaultService(store, config.baseUrl.replace(/\/$/, ''));
   const provisioning = new ProvisioningService(vault);
   class HandlerPermissions implements CanActivate {

@@ -2,7 +2,18 @@
 
 Implementation uses NestJS 11 and TypeScript on the local `codex/app-35-local-vault` branch. The repository had no commits or application code; an orphan feature branch was used in place because a worktree cannot be based on an unborn HEAD. Existing IDE files were left untouched and ignored.
 
-## Evidence
+## Current MongoDB storage verification
+
+- File persistence was replaced with one encrypted MongoDB document per namespace and an encrypted startup key verifier. MongoDB credentials and master keys remain external bootstrap configuration.
+- The test suite launches isolated loopback `mongod` processes with temporary data directories. No configured/live database is accessed; no file-store migration is performed.
+- **27 tests passed across 5 suites**, including all existing REST/runtime behavior, encrypted reconnection, wrong-key/corruption rejection, namespace/revision ciphertext binding, two concurrent store connections and two Nest servers, failed database read/write operations, namespace size bounds, and rotation/revocation visibility across writers.
+- Independent review checked encryption, namespace isolation, CAS retry/failure handling, shutdown, async service changes and documentation; no important actionable defects found. The reviewer independently reran all 27 tests successfully.
+- `npm run typecheck`, `npm run build`, and `npm audit --omit=dev` passed; production audit reports **0 vulnerabilities**. Compose configuration validates without launching a container.
+- Compiled Nest entrypoint smoke passed against an authenticated temporary MongoDB using a database-scoped `readWrite` user: bootstrap, HTTP auth, secret write/read and clean shutdown. Temporary bootstrap and database were removed afterward.
+
+The development Jest advisory caveat below remains applicable. Current storage is bounded at 8 MiB serialized plaintext per namespace, with MongoDB majority reads/writes and up to 20 revision-conflict attempts. There is no lifetime file lock or plaintext server cache. See README for configuration, ambiguous write outcomes and migration boundaries.
+
+## Original file-backend verification (historical)
 
 - Test-first suites exercise the real encrypted filesystem store and real Nest HTTP endpoints with temporary test-only credentials and keys.
 - Store tests cover encrypted restart, wrong key/corruption, exclusive ownership, concurrent transactions, thrown-mutation rollback, failed-persistence rollback, detached read/results and symlink rejection.

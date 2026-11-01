@@ -1,1 +1,1 @@
-module.exports = { preset: 'ts-jest', testEnvironment: 'node', testMatch: ['**/test/**/*.spec.ts'], testTimeout: 20000 };
+module.exports = { preset: 'ts-jest', testEnvironment: 'node', setupFilesAfterEnv: ['<rootDir>/test/mongo.ts'], testMatch: ['**/test/**/*.spec.ts'], testTimeout: 20000 };

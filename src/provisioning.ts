@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { fail, requireCondition as check } from './errors';
 import { digest, Manifest, parseManifest, vaultName } from './manifest';
-import { Namespace, Scope, namespace, scopeId } from './types';
+import { Namespace, Scope } from './types';
 import { object } from './validation';
 import { active, changed, find, newKey, newSecret, VaultService } from './vault';
 
@@ -32,8 +32,8 @@ export class ProvisioningService {
     check(Object.values(secrets).every(s => typeof s === 'string' && Buffer.byteLength(s) <= 25600));
     const sortedSecrets = Object.fromEntries(Object.entries(secrets).sort(([a], [b]) => a.localeCompare(b)));
     const requestDigest = digest({ manifest, secrets: sortedSecrets });
-    return this.vault.store.transaction(async state => {
-      const ns = namespace(state, scope), old = ns.reconciliation;
+    return this.vault.store.transaction(scope, async ns => {
+      const old = ns.reconciliation;
       if (old && (revision < old.revision || revision === old.revision && old.digest !== requestDigest)) fail(409, 'RevisionConflict');
       if (old && revision === old.revision) return this.snapshotOf(scope, ns, manifest);
       for (const entry of manifest.entries) {
@@ -63,8 +63,8 @@ export class ProvisioningService {
   snapshot(scope: Scope, input: unknown) {
     const body = object(input, ['manifest']);
     const manifest = parseManifest(body.manifest, scope);
-    return this.vault.store.read(state => {
-      const ns = state.namespaces[scopeId(scope)]; if (!ns) fail(409, 'ManifestNotProvisioned');
+    return this.vault.store.read(scope, ns => {
+      if (!ns) fail(409, 'ManifestNotProvisioned');
       return this.snapshotOf(scope, ns, manifest);
     });
   }

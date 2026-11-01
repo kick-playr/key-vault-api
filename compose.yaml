@@ -1,0 +1,18 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    ports:
+      - "127.0.0.1:27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: vault
+      MONGO_INITDB_ROOT_PASSWORD: ${VAULT_MONGODB_PASSWORD:?Set VAULT_MONGODB_PASSWORD in your launcher}
+    volumes:
+      - vault-mongodb:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ping: 1}).ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  vault-mongodb:

@@ -54,4 +54,21 @@ describe('automatic manifest provisioning', () => {
       await call(f.app, 'post', '/local/reconcile').send({ revision: 1, manifest: { schemaVersion: 1, entries }, secrets: {} }).expect(400);
     }
   });
+  it('reconciles safely across two Nest servers and observes rotation/revocation from either writer', async () => {
+    const { createApp } = await import('../src/app');
+    const second = await createApp(f.config); await second.init();
+    try {
+      const responses = await Promise.all(Array.from({ length: 6 }, (_, i) => call(i % 2 ? second : f.app, 'post', '/local/reconcile')
+        .send({ revision: 1, manifest, secrets: { database: 'shared' } }).expect(200)));
+      const kid = responses[0]!.body.mappings.DATA_KEY_ID;
+      expect(responses.every(r => r.body.mappings.DATA_KEY_ID === kid)).toBe(true);
+      const name = vaultName({ environment: 'dev', tenant: 'a' }, 'key', 'data-encryption');
+      expect((await call(second, 'get', `/keys/${name}/versions` + api).expect(200)).body.value).toHaveLength(1);
+      const secretName = vaultName({ environment: 'dev', tenant: 'a' }, 'secret', 'database');
+      await call(second, 'put', `/secrets/${secretName}` + api).send({ value: 'rotated' }).expect(200);
+      expect((await call(f.app, 'post', '/local/snapshot').send({ manifest }).expect(200)).body.mappings.DATABASE_URL).toBe('rotated');
+      await call(second, 'patch', `/keys/${name}/${kid.split('/').pop()}` + api).send({ attributes: { enabled: false } }).expect(200);
+      await call(f.app, 'post', '/local/snapshot').send({ manifest }).expect(403);
+    } finally { await second.close(); }
+  });
 });

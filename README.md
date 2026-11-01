@@ -29,24 +29,38 @@ Supply the following bootstrap values:
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `VAULT_MASTER_KEY` | yes | Base64 encoding of exactly 32 random bytes, kept outside the store |
-| `VAULT_GRANTS` | yes | JSON array of caller grants, shown below |
 | `VAULT_MONGODB_URI` | yes | Complete connection URL, e.g. `mongodb://127.0.0.1:27017/key-vault` |
 | `VAULT_BASE_URL` | no | Default `http://127.0.0.1:4000`; only loopback HTTP is accepted |
 
-Run `./create-grants.sh` to print a ready-to-copy `VAULT_GRANTS` assignment with a fresh random token for environment `dev`, tenant `tenant-123`, and `read`/`write`/`crypto`/`list` permissions. Copy that line into `.env`, adjusting the tenant/environment to your application, then restart the API.
+Every shell script supports `--help` (or `-h`) with its own usage, arguments and examples, without compiling or connecting to MongoDB: `./create-key.sh --help`, `./create-grants.sh --help`, `./migrate-grants.sh --help`, `./rotate.sh --help`, and `./grants.sh --help`.
 
-The following is a **configuration shape**, not usable credentials. Generate the master key and separate caller tokens with a cryptographically secure credential source; retain them securely across restarts. The service intentionally does not invent or print bootstrap credentials.
+Create the first persisted grant (MongoDB must be running):
 
-```json
-[
-  {
-    "token": "<at-least-32-characters-of-random-token-material>",
-    "environment": "dev",
-    "tenant": "tenant-123",
-    "permissions": ["read", "write", "crypto", "list"]
-  }
-]
+```sh
+./create-grants.sh dev tenant-123 read,write,crypto,list
 ```
+
+The command prints JSON containing the grant ID, scope, permissions and a fresh bearer token. Save the token securely: it is shown only at creation and cannot be recovered from MongoDB. With no arguments, the script uses `dev`, `tenant-123` and all four permissions. The master key stays in `.env`; generate it with `./create-key.sh` and retain it across restarts.
+
+For an existing installation, import its current tokens before removing `VAULT_GRANTS`:
+
+```sh
+./migrate-grants.sh
+# After success, remove the VAULT_GRANTS assignment from .env and restart the API.
+```
+
+Migration reads the legacy JSON array from `.env` or exported variables, preserving token values, exact scopes and permissions. It combines permissions for duplicate token/namespace entries and validates the whole array before one atomic update and prints imported/skipped counts without tokens. Repeating the import skips existing grants, including revoked grants, so stale configuration cannot restore access or old permissions. The API never reads `VAULT_GRANTS` for authorization and never imports it automatically. With an empty grant registry, the server starts but denies every API caller until a grant is created/imported. CLI wrappers compile the current sources before running and use the project-root `.env` (exported values take precedence).
+
+Grant administration is local to the trusted operator with MongoDB access and the master key. There is no grant-management HTTP endpoint; an API bearer token cannot create grants or expand its permissions:
+
+```sh
+./grants.sh list
+./grants.sh permissions <grant-id> read,list
+./grants.sh revoke <grant-id>
+./rotate.sh <grant-id>
+```
+
+`list` includes enabled and revoked grants but excludes token hashes and tokens. Revocation disables the grant permanently; create a new grant/token to replace it. `./rotate.sh <grant-id>` atomically disables an active grant and creates a replacement with a new ID and token, preserving its environment, tenant and current permissions. Save the printed replacement token immediately and update callers; the old token stops working at commit, with no overlap or restart. The token is shown only once. Rotation refuses revoked grants and preserves their records so re-importing old tokens cannot restore access. Concurrent rotations of one grant permit only one replacement. Permission edits do not reactivate a revoked grant. Creating, changing permissions and revoking take effect on subsequent requests across running server instances without restart. An already authorized in-flight request may complete.
 
 ```sh
 npm start
@@ -55,7 +69,7 @@ npm start
 Startup errors identify the invalid configuration variable or failing phase (MongoDB URL, connection, database selection, key verifier, master-key verification or HTTP listener). Known error codes such as `ECONNREFUSED`, MongoDB authentication code `18`, permission code `13` and `EADDRINUSE` include actionable hints. For example:
 
 ```text
-[startup] InvalidBootstrap: VAULT_GRANTS is missing or invalid JSON; use a quoted JSON array of caller grants in .env.
+[startup] InvalidBootstrap: VAULT_MASTER_KEY is missing or invalid; supply the base64 encoding of exactly 32 bytes.
 ```
 
 Use the original `VAULT_MASTER_KEY` when reconnecting to an existing database. Diagnostics report safe names/codes and static hints while keeping secret values and credential-bearing URLs out of output.
@@ -74,13 +88,13 @@ Use the URL from `env.example`:
 VAULT_MONGODB_URI=mongodb://127.0.0.1:27017/key-vault
 ```
 
-MongoDB has a single configuration variable. The URL must include an explicit database path, such as `/key-vault`. Missing, empty or whitespace-only database paths stop startup with an `InvalidBootstrap` error before connecting; no default database is used. `authSource` specifies authentication and does not replace the required database path. Both `vault_namespaces` and `vault_metadata` use that same database. If your MongoDB requires credentials or TLS, include them in the URL. The optional Compose service runs without authentication and binds its published port to loopback for local development. It persists data in a named volume.
+MongoDB has a single configuration variable. The URL must include an explicit database path, such as `/key-vault`. Missing, empty or whitespace-only database paths stop startup with an `InvalidBootstrap` error before connecting; no default database is used. `authSource` specifies authentication and does not replace the required database path. All of `vault_namespaces`, `vault_metadata` and `vault_grants` use that same database. If your MongoDB requires credentials or TLS, include them in the URL. The optional Compose service runs without authentication and binds its published port to loopback for local development. It persists data in a named volume.
 
 ### MongoDB persistence and concurrency
 
 The official MongoDB Node driver stores each tenant/environment namespace as one AES-256-GCM-encrypted document in `vault_namespaces`. Keys, secrets, versions, audit metadata, tombstones and reconciliation revisions remain inside the ciphertext. The only visible fields are a hashed namespace `_id`, format/storage revision, nonce, authentication tag and ciphertext. A separate encrypted verifier in `vault_metadata` rejects a wrong master key at startup; corruption of namespace ciphertext fails safely when that namespace is accessed. Nonces are fresh for every commit. Authentication binds ciphertext to both namespace ID and storage revision, preventing swapping documents or editing revision headers.
 
-Each complete namespace mutation uses MongoDB's atomic single-document insert or conditional replacement. The update filter includes the previous storage revision; concurrent writers reload and retry conflicts up to 20 times, then return `409 StorageConflict`. This follows MongoDB's [atomic update guidance](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/). No replica-set transaction or file lock is needed. Reads use the primary with majority read concern; writes require majority acknowledgement with a 5-second write-concern timeout. Driver connection/server-selection timeouts are 3 seconds and socket timeout is 5 seconds. Multiple vault instances must use the same database, master key, grants and canonical base URL.
+Each complete namespace mutation uses MongoDB's atomic single-document insert or conditional replacement. The update filter includes the previous storage revision; concurrent writers reload and retry conflicts up to 20 times, then return `409 StorageConflict`. This follows MongoDB's [atomic update guidance](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/). No replica-set transaction or file lock is needed. Reads use the primary with majority read concern; writes require majority acknowledgement with a 5-second write-concern timeout. Driver connection/server-selection timeouts are 3 seconds and socket timeout is 5 seconds. Multiple vault instances must use the same database, master key and canonical base URL.
 
 The server keeps no plaintext namespace cache: reads and cryptographic operations reload current committed MongoDB state, so another server's rotation/revocation is visible without restarting. Runtime consumers still have the bounded snapshot cache described below. Database failures return safe `503 StoreUnavailable` errors without connection strings or driver diagnostics. A write timeout may mean the database committed but acknowledgement was lost; idempotent reconciliation can retry its original event payload safely. Raw key create/secret set requests retain their normal new-version semantics.
 
@@ -96,13 +110,13 @@ The documentation includes every supported key/secret, version, crypto, reconcil
 
 Endpoints are organized into **Provisioning**, **Runtime**, **Inventory**, **Keys**, **Secrets**, **Cryptography**, and **Namespace aliases**, each with a description. Namespace aliases are grouped separately to keep the primary operations easy to find. Sections start collapsed; expand the relevant group or use the filter box to narrow the list.
 
-Click **Authorize** and paste a token from your `VAULT_GRANTS` configuration (without the `Bearer` prefix). For each request, fill `x-vault-environment` and `x-vault-tenant` to match that token's grant, and select `api-version=2025-07-01` for data-plane operations. Then use **Try it out**. These are real API calls; mutating operations create versions or permanently delete data.
+Click **Authorize** and paste a token saved when creating a grant (or retained from migration) (without the `Bearer` prefix). For each request, fill `x-vault-environment` and `x-vault-tenant` to match that token's grant, and select `api-version=2025-07-01` for data-plane operations. Then use **Try it out**. These are real API calls; mutating operations create versions or permanently delete data.
 
 Swagger UI uses local bundled assets, disables external validation and does not persist authorization tokens in browser storage. Same-origin browser API requests are accepted with the usual permissions; other Origins remain rejected, and CORS is disabled. Use the `127.0.0.1` URL shown above rather than `localhost`, matching the existing loopback host policy.
 
 ## Callers and namespaces
 
-All endpoints require a bearer token plus `x-vault-environment` and `x-vault-tenant`. Grants match these identifiers exactly. A `read` caller can read plaintext secrets in its own namespace; a `write` caller can create/rotate, update and delete; `crypto` permits operations on keys in that namespace. The separate `list` permission grants access to latest-object metadata inventory without allowing secret values, runtime snapshots, writes or crypto. Existing version-history endpoints retain their `read` requirement. Reconciliation requires both `write` and `read` because it returns a complete snapshot. Bootstrap grants must be changed by a trusted launcher and require a service restart. HTTP errors contain safe codes, never input values or stack traces. Responses are `Cache-Control: no-store`; browser requests must use the same origin and CORS is not enabled.
+All endpoints require a bearer token plus `x-vault-environment` and `x-vault-tenant`. Grants match these identifiers exactly. A `read` caller can read plaintext secrets in its own namespace; a `write` caller can create/rotate, update and delete; `crypto` permits operations on keys in that namespace. The separate `list` permission grants access to latest-object metadata inventory without allowing secret values, runtime snapshots, writes or crypto. Existing version-history endpoints retain their `read` requirement. Reconciliation requires both `write` and `read` because it returns a complete snapshot. Grants are stored in an AES-256-GCM-encrypted `vault_grants` registry containing only SHA-256 token hashes, exact scopes, permissions, IDs and enabled status. Authorization reloads it from MongoDB on each request; a database failure fails closed with `503 StoreUnavailable`. Registry writes use the same atomic revision/CAS model as namespace writes, with a separate authenticated ID and collection. The registry has the same 8 MiB plaintext limit as a namespace. Manage grants through the local CLI; grants are never returned by the data-plane API. HTTP errors contain safe codes, never input values or stack traces. Responses are `Cache-Control: no-store`; browser requests must use the same origin and CORS is not enabled.
 
 Environment and tenant identifiers are case-sensitive stable opaque IDs, 1–64 characters of letters/digits/underscore/hyphen starting with a letter or digit. `_shared` is reserved for process-scoped values. Do not use human names or identifiers that change on tenant rename.
 
@@ -110,7 +124,7 @@ Object IDs use `/namespaces/{environment}/{tenant}/keys|secrets/{name}/{version}
 
 ## Listing, inventory and metadata search
 
-Add `list` to a caller's grant in `.env` and restart the API to enable inventory. Existing grants are not changed automatically. For a metadata-only caller, use `"permissions": ["list"]`; `read` does not imply `list`. The grant generator includes all four permissions for its default development caller.
+Use `./grants.sh permissions <grant-id> read,write,crypto,list` to enable inventory for an existing full-access caller without restarting. Existing grants are not changed automatically. For a metadata-only caller, use `"permissions": ["list"]`; `read` does not imply `list`. The grant generator includes all four permissions for its default development caller.
 
 Azure-compatible listing endpoints return latest-object metadata with versionless IDs:
 
@@ -232,3 +246,7 @@ Explicit key create / secret set creates a new version; retain old version IDs a
 This subset does not implement soft deletion, recovery, purge, certificates, key import/export, symmetric/HSM keys, signing, backup/restore, rotation policies, Entra ID, TLS or comprehensive Azure SDK compatibility. Version lists return the complete local list without pagination. Metadata/delete responses and namespace-bearing IDs are explicitly limited local semantics. Use the narrow REST surface described here; do not treat this service as a drop-in replacement for the entire Azure service.
 
 It is not an HSM or production security boundary. Local administrators/processes able to read bootstrap credentials can access the database contents. There is no live key generation, migration of existing secrets, credential change or deployment performed as part of this implementation. Freddie/Chris approval referenced by APP-35 is not implied by these tests or this code.
+
+### Connection authentication
+
+`GET /local/session` (also under the namespace alias) validates the complete bearer token and selected environment/tenant without accessing resources. Any enabled grant in that exact scope can connect, even if it has only write or crypto permission. Response: `{ "authenticated": true, "environment": "...", "tenant": "..." }`. Altered/suffixed/truncated tokens return 401; a valid token for a different scope returns 403. No token, hash or grant list is returned. The endpoint is local and does not take an API version. Restart the running API to load this endpoint after upgrading.

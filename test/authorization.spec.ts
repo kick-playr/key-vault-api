@@ -11,11 +11,11 @@ describe('least-privilege callers', () => {
       const reader = 'reader-test-only-cccccccccccccccccccccc';
       const writer = 'writer-test-only-dddddddddddddddddddddd';
       const crypto = 'crypto-test-only-eeeeeeeeeeeeeeeeeeeeee';
-      f.config.grants.push(
+      await f.addGrants([
         { token: reader, environment: 'dev', tenant: 'a', permissions: ['read'] },
         { token: writer, environment: 'dev', tenant: 'a', permissions: ['write'] },
         { token: crypto, environment: 'dev', tenant: 'a', permissions: ['crypto'] },
-      );
+      ]);
       f.app = await createApp(f.config); await f.app.init();
       const read = (method: 'get' | 'put' | 'post', path: string, auth = reader) => request(f.app.getHttpServer())[method](path)
         .set('Authorization', `Bearer ${auth}`).set('x-vault-environment', 'dev').set('x-vault-tenant', 'a');
@@ -44,6 +44,26 @@ describe('least-privilege callers', () => {
       }
       await read('post', '/local/reconcile/', writer).send({}).expect(403);
       await read('post', '/LOCAL/reconcile', writer).send({}).expect(403);
+    } finally { await f.cleanup(); }
+  });
+});
+
+describe('connection authentication', () => {
+  it('requires the entire exact token and selected namespace before confirming a connection', async () => {
+    const f = await fixture();
+    try {
+      for (const malformed of [token + 'asdfasdfasfs', token.slice(0, -1), 'invalid-test-token-000000000000000000']) {
+        const response = await call(f.app, 'get', '/local/session').set('Authorization', `Bearer ${malformed}`).expect(401);
+        expect(JSON.stringify(response.body)).not.toContain(malformed);
+      }
+      expect((await call(f.app, 'get', '/local/session').expect(200)).body).toEqual({ authenticated: true, environment: 'dev', tenant: 'a' });
+      await call(f.app, 'get', '/local/session').set('x-vault-tenant', 'b').expect(403);
+      await call(f.app, 'get', '/namespaces/dev/b/local/session').expect(403);
+      for (const permission of ['read','write','crypto','list'] as const) {
+        const credential = `connection-test-${permission}-0000000000000000000000000`;
+        await f.addGrants([{ token: credential, environment: 'dev', tenant: 'a', permissions: [permission] }]);
+        await call(f.app, 'get', '/local/session').set('Authorization', `Bearer ${credential}`).expect(200);
+      }
     } finally { await f.cleanup(); }
   });
 });

@@ -35,12 +35,13 @@ export function setupSwagger(app: INestApplication, baseUrl: string) {
     .setDescription('Local development Azure Key Vault REST subset, API version 2025-07-01. Local bearer grants replace Entra ID. Deletion permanently removes all versions. Version lists are unpaginated. Keys remain non-exportable. Tenant values belong in tenant-scoped server runtime snapshots, never browser bundles. Select the matching environment and tenant headers for every API request.')
     .addTag('Provisioning', 'Start here: automatically provision manifest-defined keys and supplied secrets. Revisioned reconciliation is idempotent and requires read and write permissions.')
     .addTag('Runtime', 'Load complete validated mappings for a tenant/environment before initializing application clients. Requires read permission.')
+    .addTag('Connection', 'Authenticate a caller token for one namespace without requiring list, read, write or crypto permission.')
     .addTag('Inventory', 'List and search latest key/secret metadata with pagination. Requires the separate list permission; returns no secret values or key material.')
     .addTag('Keys', 'Generate and manage RSA keys, public JWKs, versions and metadata. Private key material remains in the vault. Deletion removes all versions.')
     .addTag('Secrets', 'Store and read versioned secret values, update metadata, and permanently delete secrets. Metadata/version lists omit values.')
     .addTag('Cryptography', 'Encrypt or decrypt one block with an explicit RSA key version using RSA-OAEP-256. Requires crypto permission.')
     .addTag('Namespace aliases', 'Alternative URLs containing environment and tenant in the path. They use the same bodies and permissions as the primary endpoints; path identifiers must match the required headers.')
-    .addServer(baseUrl).addBearerAuth({ type: 'http', scheme: 'bearer', description: 'A caller token from VAULT_GRANTS. Paste the token only, without the Bearer prefix.' }, 'bearer').build();
+    .addServer(baseUrl).addBearerAuth({ type: 'http', scheme: 'bearer', description: 'A saved caller token from grant creation or legacy migration. Grants are stored in MongoDB. Paste the token only, without the Bearer prefix.' }, 'bearer').build();
   const doc = SwaggerModule.createDocument(app, config, { autoTagControllers: false });
   doc.components = { ...doc.components, schemas: { ...doc.components?.schemas, ...schemas } };
   for (const [path, methods] of Object.entries(doc.paths)) {

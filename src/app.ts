@@ -2,8 +2,9 @@ import 'reflect-metadata';
 import { ArgumentsHost, Body, CanActivate, Catch, Controller, Delete, ExceptionFilter, ExecutionContext, Get, HttpCode, INestApplication, Module, Param, Patch, Post, Put, Query, Req, SetMetadata, UseGuards } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NextFunction, Request, Response, json } from 'express';
-import { authorize, Permission, validateConfig, VaultConfig } from './config.js';
+import { Permission, validateConfig, VaultConfig } from './config.js';
 import { VaultError, fail } from './errors.js';
+import { GrantService } from './grants.js';
 import { MongoStore } from './store.js';
 import { Scope } from './types.js';
 import { scopePart } from './validation.js';
@@ -34,16 +35,17 @@ class SafeErrors implements ExceptionFilter {
 export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const config = validateConfig(input);
   const store = await MongoStore.open(config);
+  const grants = new GrantService(store);
   const vault = new VaultService(store, config.baseUrl.replace(/\/$/, ''));
   const provisioning = new ProvisioningService(vault);
   const inventory = new InventoryService(vault, config.masterKey);
   class HandlerPermissions implements CanActivate {
-    canActivate(context: ExecutionContext) {
+    async canActivate(context: ExecutionContext) {
       const req = context.switchToHttp().getRequest<ScopedRequest>();
       if (req.params.environment !== undefined &&
           (req.params.environment !== req.vaultScope.environment || req.params.tenant !== req.vaultScope.tenant)) fail(403, 'Forbidden');
       const permissions: Permission[] = Reflect.getMetadata('vault-permissions', context.getHandler()) ?? ['write'];
-      for (const permission of permissions) authorize(config, req.headers.authorization, req.vaultScope, permission);
+      await grants.authorize(req.headers.authorization, req.vaultScope, permissions);
       return true;
     }
   }
@@ -55,6 +57,9 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     { name: 'x-vault-tenant', required: true, description: 'Exact tenant authorized by the caller grant; _shared for process scope.', schema: { type: 'string' } },
   ])
   class VaultController {
+    @VaultEndpoint('Connection', 'Validate the exact caller token for this namespace without reading resources', 'valid scoped grant', 'Session', undefined, true)
+    @Get('local/session') @Permissions()
+    session(@Req() req: ScopedRequest) { return { authenticated: true, environment: req.vaultScope.environment, tenant: req.vaultScope.tenant }; }
     @VaultEndpoint('Inventory', 'List latest key metadata without key material', 'list', 'KeyInventory')
     @InventoryQueries() @Get('keys') @Permissions('list')
     listKeys(@Req() req: ScopedRequest, @Query() query: unknown) { return inventory.list(req.vaultScope, 'keys', query); }
@@ -101,7 +106,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   class VaultModule {}
   try {
     const app = await NestFactory.create(VaultModule, { logger: false, bodyParser: false, abortOnError: false });
-    app.use((req: ScopedRequest, res: Response, next: NextFunction) => {
+    app.use(async (req: ScopedRequest, res: Response, next: NextFunction) => {
       res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
       try {
         const host = req.headers.host ?? '';
@@ -113,7 +118,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
         const scope = { environment: scopePart(req.headers['x-vault-environment']), tenant: scopePart(req.headers['x-vault-tenant']) };
         if (match && (match[1] !== scope.environment || match[2] !== scope.tenant)) fail(403, 'Forbidden');
         const path = match ? match[3]! : req.path;
-        authorize(config, req.headers.authorization, scope);
+        await grants.authorize(req.headers.authorization, scope);
         if (!/^\/local\//i.test(path) && req.query['api-version'] !== '2025-07-01') fail(400, 'BadParameter');
         req.vaultScope = scope; next();
       } catch (e) { const err = e instanceof VaultError ? e : new VaultError(500, 'InternalError'); res.status(err.status).json({ error: { code: err.code, message: err.code } }); }

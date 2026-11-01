@@ -1,11 +1,27 @@
 node_modules/
 dist/
 coverage/
-.env
-.env.*
+.env*
 !.env.example
 .vault/
 *.vault
 *.vault.lock
 .superpowers/
 .idea/
+
+# Local credentials, key material and grant/secret exports
+.secrets/
+secrets.json
+secrets.*.json
+grants.json
+grants.*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Local vault state, database exports and diagnostic output
+*.dump
+*.log

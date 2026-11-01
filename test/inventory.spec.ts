@@ -7,8 +7,8 @@ describe('metadata inventory', () => {
   let f: Awaited<ReturnType<typeof fixture>>;
   beforeEach(async () => {
     f = await fixture(); await f.app.close();
-    f.config.grants.push({ token: listToken, environment: 'dev', tenant: 'a', permissions: ['list'] });
-    f.config.grants.push({ token: listTokenB, environment: 'dev', tenant: 'b', permissions: ['list'] });
+    await f.addGrants([{ token: listToken, environment: 'dev', tenant: 'a', permissions: ['list'] }]);
+    await f.addGrants([{ token: listTokenB, environment: 'dev', tenant: 'b', permissions: ['list'] }]);
     const { createApp } = await import('../src/app.js'); f.app = await createApp(f.config); await f.app.init();
   });
   afterEach(async () => { await f.cleanup(); });

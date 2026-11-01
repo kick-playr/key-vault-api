@@ -2,7 +2,9 @@ import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.js';
-import { VaultConfig } from '../src/config.js';
+import { GrantService } from '../src/grants.js';
+import { MongoStore } from '../src/store.js';
+import { Grant, VaultConfig } from '../src/config.js';
 import { MongoClient } from 'mongodb';
 import { mongoUri } from './mongo.js';
 
@@ -13,14 +15,19 @@ export async function fixture() {
   const mongoDatabase = 'test_' + randomUUID().replaceAll('-', '');
   const config: VaultConfig = {
     mongoUri: `${mongoUri}/${mongoDatabase}`, masterKey: randomBytes(32), baseUrl: 'http://127.0.0.1:4000',
-    grants: [
+  };
+  const initialGrants: Grant[] = [
       { token, environment: 'dev', tenant: 'a', permissions: ['read', 'write', 'crypto'] },
       { token: otherToken, environment: 'dev', tenant: 'b', permissions: ['read', 'write', 'crypto'] },
       { token, environment: 'dev', tenant: '_shared', permissions: ['read', 'write', 'crypto'] },
-    ],
+    ];
+  const addGrants = async (values: Grant[]) => {
+    const store = await MongoStore.open(config);
+    try { await new GrantService(store).import(values); } finally { await store.close(); }
   };
+  await addGrants(initialGrants);
   const app = await createApp(config); await app.init();
-  const result = { app, config, cleanup: async () => { await result.app.close(); const client = await new MongoClient(mongoUri).connect();
+  const result = { app, config, addGrants, cleanup: async () => { await result.app.close(); const client = await new MongoClient(mongoUri).connect();
     try { await client.db(mongoDatabase).dropDatabase(); } finally { await client.close(); } } };
   return result;
 }

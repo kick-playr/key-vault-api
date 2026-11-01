@@ -1,5 +1,20 @@
 # APP-35 verification record
 
+## Grant token rotation
+
+Added executable `rotate.sh <grant-id>` and equivalent `grants.sh rotate <grant-id>`. Rotation atomically disables the original and persists a replacement token hash with a new ID, retaining the latest scope/permissions. The replacement token is printed once after commit. Revoked/unknown/invalid grants fail without changes or token output. Disabled originals are retained to prevent legacy import from resurrecting them. Concurrent rotations across MongoDB connections allow one replacement.
+
+Build, typecheck and **59 tests across 9 suites** passed. Three new regressions cover live API old/new-token authorization and scope/permission preservation, re-import protection, invalid/revoked/unknown grants and concurrent rotations. Shell syntax/whitespace checks passed; independent review found no important defects. No existing local grant was rotated.
+
+## MongoDB caller grants
+
+Authorization now reads an encrypted `vault_grants` registry on each request, including handler permission checks. It persists SHA-256 token hashes, exact scopes, permissions, IDs and enabled status; it has no environment fallback or grant-management HTTP endpoint. Registry writes use the existing encrypted CAS implementation with a distinct authenticated ID, so concurrent connections preserve changes. CLI commands create/list/change permissions/revoke/import; only creation prints a bearer token.
+
+Build, typecheck and **56 tests across 9 suites** passed. Added tests verify running-API grant creation, immediate permission changes and revocation across connections, tenant isolation, hash-only decrypted contents, encrypted storage, safe metadata listing, reconnection persistence, atomic/idempotent migration, duplicate legacy permission union, revoked-grant non-resurrection, two-connection concurrent management, invalid input, CLI output secrecy, empty-registry denial and database failure/corruption. Existing authorization, namespace, provisioning and Swagger suites remain green. Independent security review identified the duplicate-entry migration issue; a failing regression reproduced it, the fix unions incoming permissions before CAS, and follow-up review found no further important defects. Shell syntax and whitespace checks passed.
+
+The existing local grant was explicitly imported without changing its token or permissions and verified against the MongoDB authorization service. Its assignment was removed from `.env` after verifying other bootstrap values remained identical. An ignored mode-0600 `.env.grants-backup` retains the original caller token for recovery; neither file is tracked. The running API process was not restarted. Swagger bearer documentation was updated to refer to saved creation/migration tokens and its suite was rerun.
+
+
 Implementation uses NestJS 12 and TypeScript 6 on Node 24 on the local `codex/app-35-local-vault` branch. The repository had no commits or application code; an orphan feature branch was used in place because a worktree cannot be based on an unborn HEAD. Existing IDE files were left untouched and ignored.
 
 ## Metadata inventory and listing
@@ -75,3 +90,9 @@ The production dependency audit reports no advisories. Nest 12 includes patched 
 No deployment, live credential/key provisioning, migration, external message, or Jira status transition was performed.
 
 Database confirmation: the actual .env URI explicitly names key-vault; effective startup configuration selects the same database. A read-only connection/ping and collection listing succeeded: vault_metadata exists; vault_namespaces has not yet been created. No key or secret was generated for this check.
+
+## UI connection authentication regression
+
+Added read-only GET /local/session behind existing full-token and namespace authorization. Its controller requires no extra operation permission; scope checks still apply. Tests reject appended/truncated tokens with 401 and wrong scope/namespace aliases with 403, verify valid responses, and verify read-only, write-only, crypto-only and list-only callers can authenticate without resource access. Existing altered-token resource request also returns 401. Full API suite: 9 suites, 60 tests passed; typecheck and build passed. Fixtures use disposable MongoDB; no live grant or secret changes.
+
+Runtime smoke check: restarted the local API from the verified build, confirmed /docs-json includes GET /local/session, and a fabricated invalid suffixed credential returns HTTP 401. No real credential was read or tested.

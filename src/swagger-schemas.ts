@@ -11,6 +11,7 @@ const entry = {
 };
 const obj = (properties: SchemaObject['properties'], required: string[] = []): SchemaObject => ({ type: 'object', additionalProperties: false, properties, ...(required.length ? { required } : {}) });
 export const schemas: Record<string, SchemaObject> = {
+  Session: obj({ authenticated: { type: 'boolean', enum: [true] }, environment: text, tenant: text }, ['authenticated', 'environment', 'tenant']),
   InputAttributes: obj({ enabled: { type: 'boolean', default: true }, nbf: { type: 'integer', minimum: 0, description: 'Not-before epoch seconds.' }, exp: { type: 'integer', minimum: 0, description: 'Expiry epoch seconds; must be after nbf.' } }),
   Attributes: { type: 'object', properties: { enabled: { type: 'boolean' }, nbf: { type: 'integer' }, exp: { type: 'integer' }, created: { type: 'integer' }, updated: { type: 'integer' }, recoveryLevel: { type: 'string', enum: ['Purgeable'] } }, required: ['enabled', 'created', 'updated', 'recoveryLevel'] },
   SetSecret: obj({ value: { type: 'string', maxLength: 25600, description: 'At most 25 KiB of UTF-8 bytes.' }, attributes: ref('InputAttributes'), tags, contentType: { type: 'string', maxLength: 255 } }, ['value']),

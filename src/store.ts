@@ -3,6 +3,7 @@ import { Collection, Db, MongoClient, MongoServerError } from 'mongodb';
 import { describeSystemError, fail } from './errors.js';
 import { emptyNamespace, Namespace, Scope, scopeId } from './types.js';
 import { scopePart } from './validation.js';
+import type { StoredGrant } from './grants.js';
 import { databaseFromMongoUri } from './mongodb-url.js';
 
 export interface StoreConfig { mongoUri: string; masterKey: Buffer }
@@ -78,9 +79,9 @@ export class MongoStore {
       return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]).toString('utf8'));
     } catch { fail(503, 'StoreUnavailable'); }
   }
-  private async fetch(id: string): Promise<Envelope | null> {
+  private async fetch(id: string, collection = this.collection): Promise<Envelope | null> {
     if (this.closed) fail(503, 'StoreUnavailable');
-    try { return await this.collection.findOne({ _id: id }); } catch { fail(503, 'StoreUnavailable'); }
+    try { return await collection.findOne({ _id: id }); } catch { fail(503, 'StoreUnavailable'); }
   }
   async read<T>(scope: Scope, fn: (namespace: Namespace | undefined) => T): Promise<T> {
     const envelope = await this.fetch(this.id(scope));
@@ -88,29 +89,39 @@ export class MongoStore {
     return structuredClone(fn(ns));
   }
   transaction<T>(scope: Scope, fn: (namespace: Namespace) => T | Promise<T>): Promise<T> {
-    const id = this.id(scope);
-    const operation = (this.queues.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    return this.transactionDocument(this.collection, this.id(scope), emptyNamespace, fn);
+  }
+  async readGrants(): Promise<StoredGrant[]> {
+    const envelope = await this.fetch('grants:registry', this.database.collection<Envelope>('vault_grants'));
+    return envelope ? this.decode(envelope) as StoredGrant[] : [];
+  }
+  transactionGrants<T>(fn: (grants: StoredGrant[]) => T): Promise<T> {
+    return this.transactionDocument(this.database.collection<Envelope>('vault_grants'), 'grants:registry', () => [] as StoredGrant[], fn);
+  }
+  private transactionDocument<State, T>(collection: Collection<Envelope>, id: string, initial: () => State, fn: (value: State) => T | Promise<T>): Promise<T> {
+    const queueId = `${collection.collectionName}:${id}`;
+    const operation = (this.queues.get(queueId) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       for (let attempt = 0; attempt < 20; attempt++) {
-        const current = await this.fetch(id);
-        const ns = current ? this.decode(current) as Namespace : emptyNamespace();
+        const current = await this.fetch(id, collection);
+        const ns = current ? this.decode(current) as State : initial();
         const result = await fn(ns);
         const revision = (current?.revision ?? 0) + 1;
         if (!Number.isSafeInteger(revision)) fail(503, 'StoreUnavailable');
         const next = this.encode(id, revision, ns);
         try {
           if (current) {
-            const written = await this.collection.replaceOne({ _id: id, revision: current.revision }, next);
+            const written = await collection.replaceOne({ _id: id, revision: current.revision }, next);
             if (written.matchedCount !== 1) continue;
           } else {
-            try { await this.collection.insertOne(next); } catch (e) { if (duplicate(e)) continue; throw e; }
+            try { await collection.insertOne(next); } catch (e) { if (duplicate(e)) continue; throw e; }
           }
           return structuredClone(result);
         } catch { fail(503, 'StoreUnavailable'); }
       }
       fail(409, 'StorageConflict');
     });
-    this.queues.set(id, operation);
-    void operation.finally(() => { if (this.queues.get(id) === operation) this.queues.delete(id); }).catch(() => undefined);
+    this.queues.set(queueId, operation);
+    void operation.finally(() => { if (this.queues.get(queueId) === operation) this.queues.delete(queueId); }).catch(() => undefined);
     return operation;
   }
   async close() {

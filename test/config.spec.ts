@@ -14,15 +14,20 @@ describe('.env bootstrap configuration', () => {
     VAULT_GRANTS: JSON.stringify([{ token: 'test-only-token-aaaaaaaaaaaaaaaaaaaaaaaa', environment: 'dev', tenant: 'a', permissions: ['read'] }]),
   });
   const contents = () => Object.entries(values()).map(([k, v]) => `${k}='${v}'`).join('\n');
-  it('loads quoted JSON grants and bootstrap values from .env without changing process.env', async () => {
+  it('loads bootstrap values from .env without changing process.env', async () => {
     const path = join(dir, '.env');
     await writeFile(path, contents() + '\nVAULT_BASE_URL=http://127.0.0.1:4000 # local API\n');
     const before = process.env.VAULT_MASTER_KEY;
     const config = loadBootstrapConfig(path, {});
     expect(config.baseUrl).toBe('http://127.0.0.1:4000');
     expect(config.masterKey).toEqual(Buffer.alloc(32, 1));
-    expect(config.grants[0]?.tenant).toBe('a');
+    expect(config).not.toHaveProperty('grants');
     expect(process.env.VAULT_MASTER_KEY).toBe(before);
+  });
+  it('boots without environment grants and ignores legacy values at runtime', () => {
+    const { VAULT_GRANTS, ...bootstrap } = values();
+    expect(loadBootstrapConfig(join(dir, 'missing'), bootstrap).baseUrl).toBe('http://127.0.0.1:4000');
+    expect(loadBootstrapConfig(join(dir, 'missing'), { ...bootstrap, VAULT_GRANTS: 'legacy-not-used' })).not.toHaveProperty('grants');
   });
   it('gives exported values precedence over file values', async () => {
     const path = join(dir, '.env'); await writeFile(path, contents());
@@ -35,13 +40,13 @@ describe('.env bootstrap configuration', () => {
   });
   it('fails safely for invalid bootstrap or unreadable file paths without echoing secrets', async () => {
     const path = join(dir, '.env');
-    await writeFile(path, contents() + '\nVAULT_GRANTS=secret-canary-invalid-json\n');
+    await writeFile(path, contents() + '\nVAULT_MASTER_KEY=secret-canary-invalid-key\n');
     expect(() => loadBootstrapConfig(path, {})).toThrow(/^InvalidBootstrap$/);
     await mkdir(join(dir, 'directory'));
     expect(() => loadBootstrapConfig(join(dir, 'directory'), values())).toThrow(/^InvalidBootstrap$/);
   });
   it('identifies the invalid bootstrap variable without exposing its value', () => {
-    for (const [name, value] of [['VAULT_MASTER_KEY', 'private-canary'], ['VAULT_GRANTS', 'private-canary'], ['VAULT_MONGODB_URI', 'private-canary'], ['VAULT_BASE_URL', 'private-canary']]) {
+    for (const [name, value] of [['VAULT_MASTER_KEY', 'private-canary'], ['VAULT_MONGODB_URI', 'private-canary'], ['VAULT_BASE_URL', 'private-canary']]) {
       try { loadBootstrapConfig(join(dir, 'missing'), { ...values(), [name!]: value }); throw new Error('Expected validation failure'); }
       catch (error) {
         expect(error).toBeInstanceOf(VaultError);

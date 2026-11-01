@@ -35,6 +35,22 @@ Supply the following bootstrap values:
 
 Every shell script supports `--help` (or `-h`) with its own usage, arguments and examples, without compiling or connecting to MongoDB: `./create-key.sh --help`, `./create-grants.sh --help`, `./migrate-grants.sh --help`, `./rotate.sh --help`, `./grants.sh --help`, `./import-fcrww-keys.sh --help`, and `./create-tenant-keys.sh --help`.
 
+### Generate consumer authentication
+
+```sh
+./create-key-vault-grants.sh --clubs "fcrww,fcuster" --shared
+```
+
+Creates new grants with `read` and `list` permissions for each requested namespace
+and prints one shell-ready `export LOCAL_KEYVAULT_AUTH_JSON='…'` line. Run separately
+for each consumer. Tokens are printed only once; existing grants remain valid
+until revoked. Existing grants are not upgraded automatically. The script reads
+the vault `.env` (exported variables take precedence), requires MongoDB access,
+`VAULT_MASTER_KEY`, Node.js 24 and installed dependencies. It does not change
+`.env` or your parent shell. `--environment` defaults to `development`; `--help`
+needs no compilation or database. Use `grants.sh` to manage or revoke grants.
+The removed bindings export script remains unnecessary with manifest discovery.
+
 ### Configure simple vault startup
 
 Consumers authenticate with their scoped grants and discover published application

@@ -315,3 +315,59 @@ It is not an HSM or production security boundary. Local administrators/processes
 ### Connection authentication
 
 `GET /local/session` (also under the namespace alias) validates the complete bearer token and selected environment/tenant without accessing resources. Any enabled grant in that exact scope can connect, even if it has only write or crypto permission. Response: `{ "authenticated": true, "environment": "...", "tenant": "..." }`. Altered/suffixed/truncated tokens return 401; a valid token for a different scope returns 403. No token, hash or grant list is returned. The endpoint is local and does not take an API version. Restart the running API to load this endpoint after upgrading.
+
+## APP-36 read-only startup snapshots
+
+`POST /local/runtime-snapshot` (or its `/namespaces/{environment}/{tenant}` alias) reads a complete, explicitly version-pinned set from **one** committed namespace document. It requires only `read`, exact namespace headers and bearer authentication. It never reconciles, creates, rotates or repairs resources. The request body is limited to 64 KiB, at most 100 resolved values; responses are limited to 4 MiB and marked `no-store`. There is no Azure `api-version` query on this local extension.
+
+The v1 request contains `schemaVersion`, a positive `bindingRevision`, `bindingDigest`, `keySets` and `secrets`. Named sets retain `<profile>:<tenant>:key` and the existing `tk-<role>-<hash>` physical names. `wrappingVersions` associates each application `keyVersion` with an exact immutable `vaultVersion`; `currentWrappingVersion`, `indexVersion` and `controlVersion` pin the complete set. Historical wrapping pins remain readable for old ciphertext if those versions remain enabled. Ordinary secret descriptors `{mapping,purpose,version}` resolve the existing `kv-<hash>` purpose convention. No naming or data migration happens. The current endpoint rejects `latest`; operators must select/review immutable versions through existing metadata/version tools before preparing an operational binding.
+
+The response echoes the exact namespace/revision/digest and includes namespace `generation`, `loadedAt`, the complete key sets and ordinary secret values with version/status metadata. These are **server-only values**; never expose this endpoint through a browser proxy without a separately reviewed authorization and display policy. A missing, inactive, mismatched or denied member fails the entire read. Revisions are correlation values supplied by trusted consumer configuration, not a proof that the vault validated a separate control database revision. No cross-namespace atomicity or backup-rollback protection is claimed.
+
+### Server-only consumer module
+
+The root package exports `@kick-playr/local-key-vault/runtime-client` as dependency-free CommonJS with CJS/ESM TypeScript declarations. It does not import Nest or require the vault master key/database bootstrap. Install a reviewed immutable source revision, not a workstation path or floating branch.
+
+```js
+const { bindingDigest, createSecretsRuntime } = require('@kick-playr/local-key-vault/runtime-client');
+const request = {
+  schemaVersion: 1,
+  bindingRevision: 1,
+  keySets: [],
+  secrets: [{ mapping: 'WORKFLOW_SHARED_WRAPPING_KEY_V1', purpose: 'shared-configuration-key', version: '<immutable-32-hex-version>' }],
+};
+request.bindingDigest = bindingDigest(request); // Only after replacing the version placeholder.
+// Put {schemaVersion:1,applications:{'club-api':{scope:{environment:'development',tenant:'_shared'},request}},tenants:[]}
+// into LOCAL_KEYVAULT_BINDINGS_JSON. This is reference metadata, never values.
+const runtime = createSecretsRuntime({ environment: process.env });
+const loaded = await runtime.loadProcess('club-api', {
+  allowedMappings: ['WORKFLOW_SHARED_WRAPPING_KEY_V1'],
+  requiredMappings: ['WORKFLOW_SHARED_WRAPPING_KEY_V1'],
+});
+// Validate application-specific key format, then inject only process-scoped values
+// before dependent imports/client construction. Tenant values never enter process.env.
+```
+
+`SECRETS_KEYS_STRATEGY` absent defaults to `ENV_VARIABLES`; only exact `ENV_VARIABLES` or `LOCAL_KEYVAULT` are accepted. Environment mode returns only caller-allowlisted values with existing missing/optional semantics. Vault mode requires `NODE_ENV=development` (or isolated test mode), rejects Vercel/AWS serverless activation and production namespaces, and has **no environment-secret fallback**. `LOCAL_KEYVAULT_URL` defaults to `http://127.0.0.1:4000` and must be a credential-free loopback HTTP origin.
+
+`LOCAL_KEYVAULT_AUTH_JSON` is the initial local authentication exception:
+
+```json
+{"schemaVersion":1,"grants":[{"environment":"development","tenant":"_shared","token":"<application-specific-read-only-token>"}]}
+```
+
+Use one exact per-application/per-namespace read-only grant; no wildcard lookup or file-token fallback. Never use an operator write token for runtime. All other application secrets, including the shared configuration key, belong in the vault in LOCAL_KEYVAULT mode. The vault service's own unseal/master key is a separate infrastructure root. A server may inject a `credentialSupplier(scope)` for a reviewed authentication adapter; the default local adapter reads the scoped environment JSON. This does not enable cloud mode; cloud hosting/workload identity remains APP-47.
+
+`LOCAL_KEYVAULT_BINDINGS_JSON` has exact `{schemaVersion:1,applications:{[application]:{scope,request}},tenants:[{scope,request}]}` shape. Process applications must use `_shared` and ordinary-secret descriptors. At most 16 application descriptors and 32 distinct tenants are accepted. Tenant descriptors must come from server-owned reviewed configuration. `loadTenant(tenant, bindingRevision)` requires its exact configured revision; it cannot create a new binding from a request header. Consumers must additionally check trusted current control revisions before admission so changed/new tenants require restart.
+
+Calls use only the read-only snapshot route, a five-second request timeout, at most two retries for transport/503 failures (250/500ms backoff), a shared 30-second startup-read budget, bounded JSON responses and no redirects. Denied/missing/mismatched reads are not retried. Every response is checked for exact scope, revision/digest, mapping set, immutable versions and active attributes before publishing a deeply frozen snapshot. `snapshotMappings` extracts the current wrapping/index/control plus ordinary secrets and rejects duplicate/public/loader mappings. Application-specific format validation remains the consumer's responsibility.
+
+Loaded snapshots are retained **until process restart**, with no 30-second TTL. A later vault outage/rotation/revocation does not erase already disclosed memory; restart/recycle consumers to pick up changes or revoke cached use. At next startup the pinned versions must still be authorized and active. `close()` cancels in-flight work and drops caches; JavaScript strings/already returned references cannot be remotely erased. This restart-based contract deliberately differs from the earlier `RuntimeVault` reconcile/refresh helper, which must not be used for normal APP-36 startup.
+
+Pure contract verification without a database or development service:
+
+```sh
+npm test -- --config jest.runtime.config.cjs
+npm run typecheck
+npm run build
+```

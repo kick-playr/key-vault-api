@@ -1,6 +1,6 @@
 {
   "name": "@kick-playr/local-key-vault",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "NestJS local development vault with an explicit Azure Key Vault REST subset",
   "engines": {
@@ -18,7 +18,8 @@
     "test:discovery": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.discovery.config.cjs --runInBand",
     "test:runtime-manifests": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.runtime-manifests.config.cjs --runInBand",
     "test:manifest-plan": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.manifest-plan.config.cjs --runInBand",
-    "test:grant-export": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.grant-export.config.cjs --runInBand"
+    "test:grant-export": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.grant-export.config.cjs --runInBand",
+    "test:inventory": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.inventory-unit.config.cjs --runInBand"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",

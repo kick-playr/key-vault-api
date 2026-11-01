@@ -122,3 +122,15 @@ Database confirmation: the actual .env URI explicitly names key-vault; effective
 Added read-only GET /local/session behind existing full-token and namespace authorization. Its controller requires no extra operation permission; scope checks still apply. Tests reject appended/truncated tokens with 401 and wrong scope/namespace aliases with 403, verify valid responses, and verify read-only, write-only, crypto-only and list-only callers can authenticate without resource access. Existing altered-token resource request also returns 401. Full API suite: 9 suites, 60 tests passed; typecheck and build passed. Fixtures use disposable MongoDB; no live grant or secret changes.
 
 Runtime smoke check: restarted the local API from the verified build, confirmed /docs-json includes GET /local/session, and a fabricated invalid suffixed credential returns HTTP 401. No real credential was read or tested.
+
+## APP-50 purpose labels/search — release 0.1.4 (2026-11-01)
+
+Added optional local-inventory `search` for a case-insensitive literal name OR purpose substring. The existing metadata scan filters before slicing pages; signed cursor fingerprints include search automatically. Existing kind/namespace/permission behavior remains unchanged. No secret values, private material or new storage are involved.
+
+Observed three new regressions fail before implementation. Then 70 tests across 10 pure/in-memory suites passed, including the three new search tests (name/purpose OR, case, punctuation, missing tags, pagination, changed-search cursors, scope, payload bounds and exclusion of secret values). Command:
+
+```sh
+node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.inventory-unit.config.cjs --testMatch '**/test/{inventory-search,config,audit,runtime-client,runtime-snapshot,runtime-manifest-client,runtime-manifest-plan,runtime-manifests,oauth-credentials,create-key-vault-grants}.spec.ts' --runInBand
+```
+
+`npm run typecheck` and `npm run build` passed. The MongoDB-backed full suite was not run because it launches disposable mongod processes; service starts were outside this task's authorization. No real vault, running services, credentials or stores were touched. Locked install reports the same 6 low-severity development-tooling advisories previously documented; no dependency updates made. Live HTTP/database integration and running UI remain unverified.

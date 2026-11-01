@@ -430,3 +430,9 @@ building the feature; no bootstrap token or ENV secret must be changed.
 Run `npm run test:oauth` for isolated service/HTTP permission/audit tests. Existing
 cloud authentication restrictions still apply; this adds development renewal, not
 cloud workload identity configuration.
+
+## Purpose search — 0.1.4 (2026-11-01)
+
+`GET /local/inventory?kind=secret&search=database` matches a case-insensitive literal substring in the physical resource name **or** the latest version's `purpose` tag. Search is 1–512 characters without control characters; whitespace and punctuation are literal, with no regex evaluation. Omit search to list normally. Existing filters still combine using AND. Search runs before pagination; continuation tokens bind the original query and namespace. Values and key material are never searched or returned. This optional local query does not alter the Azure-compatible `/keys` or `/secrets` list contract.
+
+Install this API change before the app's purpose-search update. No store migration, new grants, deployment or running-service restart is performed by these commits. Pure search regression tests run with `npm run test:inventory` without a MongoDB process.

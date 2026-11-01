@@ -22,7 +22,7 @@ export class MongoStore {
     this.database = client.db(database);
     this.collection = this.database.collection<Envelope>('vault_namespaces');
   }
-  static async open(config: StoreConfig): Promise<MongoStore> {
+  static async open(config: StoreConfig, options: { createVerifier?: boolean } = {}): Promise<MongoStore> {
     const database = databaseFromMongoUri(config.mongoUri);
     if (!Buffer.isBuffer(config.masterKey) || config.masterKey.length !== 32 ||
         !/^mongodb(?:\+srv)?:\/\/\S+$/.test(config.mongoUri)) fail(500, 'InvalidBootstrap');
@@ -43,6 +43,10 @@ export class MongoStore {
       const metadata = store.database.collection<Envelope>('vault_metadata');
       stage = 'MongoDB key verifier access';
       let marker = await metadata.findOne({ _id: 'master-key-check' });
+      if (!marker && options.createVerifier === false) {
+        stage = 'Existing vault metadata verification; initialize the vault separately before generating bindings';
+        throw Error();
+      }
       if (!marker) {
         const candidate = store.encode('master-key-check', 0, { marker: 'local-vault-key-check-v1' });
         try { await metadata.insertOne(candidate); } catch (e) { if (!duplicate(e)) throw e; }

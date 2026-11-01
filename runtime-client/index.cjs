@@ -55,6 +55,22 @@ function parseSnapshotRequest(input) {
   const parsed = descriptor(input); check(typeof input.bindingDigest === 'string' && /^[a-f0-9]{64}$/.test(input.bindingDigest) && input.bindingDigest === bindingDigest(parsed));
   return { ...parsed, bindingDigest: input.bindingDigest };
 }
+function parseRuntimeManifest(input) {
+  const body = object(input, ['schemaVersion', 'application', 'scope', 'request', 'tenants']);
+  check(body.schemaVersion === 1 && typeof body.application === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(body.application));
+  const selected = scope(body.scope), request = parseSnapshotRequest(body.request);
+  check(['development', 'dev', 'test'].includes(selected.environment));
+  for (const key of request.keySets) check(key.reference.split(':')[1] === selected.tenant);
+  check(Array.isArray(body.tenants) && body.tenants.length <= 32);
+  const seen = new Set();
+  const tenants = body.tenants.map(raw => {
+    const t = object(raw, ['tenant', 'bindingRevision', 'bindingDigest']), tenant = part(t.tenant);
+    check(tenant !== '_shared' && !seen.has(tenant) && Number.isSafeInteger(t.bindingRevision) && t.bindingRevision > 0 && typeof t.bindingDigest === 'string' && /^[a-f0-9]{64}$/.test(t.bindingDigest)); seen.add(tenant);
+    return { tenant, bindingRevision: t.bindingRevision, bindingDigest: t.bindingDigest };
+  }).sort((a, b) => compare(a.tenant, b.tenant));
+  check(selected.tenant === '_shared' ? request.keySets.length === 0 : tenants.length === 0);
+  return { schemaVersion: 1, application: body.application, scope: selected, request, tenants };
+}
 function attributes(input) {
   check(input && typeof input === 'object' && !Array.isArray(input));
   check(Object.keys(input).every(k => ['enabled', 'created', 'updated', 'recoveryLevel', 'nbf', 'exp'].includes(k)));
@@ -119,12 +135,15 @@ function createRuntime(options) {
   check(typeof window === 'undefined');
   const env = { ...options.environment }, strategy = selectSecretsStrategy(env), fetcher = options.fetch ?? globalThis.fetch;
   let closed = false, startupDeadline; const controllers = new Set(), cache = new Map(), pending = new Map();
-  let base, bindings, auth;
+  let base, bindings, auth, activeApplication;
+  const discovery = env.LOCAL_KEYVAULT_BINDINGS_JSON === undefined, manifestPromises = new Map(), bindingPromises = new Map();
+  const manifestEnvironment = env.LOCAL_KEYVAULT_ENVIRONMENT ?? 'development';
   if (strategy === 'LOCAL_KEYVAULT') {
     check(['development', 'test'].includes(env.NODE_ENV) && env.VERCEL === undefined && env.AWS_LAMBDA_FUNCTION_NAME === undefined && !['production', 'PROD'].includes(env.STAGE));
     const url = new URL(env.LOCAL_KEYVAULT_URL ?? 'http://127.0.0.1:4000');
     check(url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.pathname === '/' && !url.search && !url.hash && !url.username && !url.password); base = url.origin;
-    bindings = object(json(env.LOCAL_KEYVAULT_BINDINGS_JSON), ['schemaVersion', 'applications', 'tenants']);
+    check(['development', 'dev', 'test'].includes(manifestEnvironment));
+    bindings = discovery ? { schemaVersion: 1, applications: {}, tenants: [] } : object(json(env.LOCAL_KEYVAULT_BINDINGS_JSON), ['schemaVersion', 'applications', 'tenants']);
     check(bindings.schemaVersion === 1 && bindings.applications && typeof bindings.applications === 'object' && !Array.isArray(bindings.applications) && Object.keys(bindings.applications).length <= 16 && Array.isArray(bindings.tenants) && bindings.tenants.length <= 32);
     const entries = [...Object.entries(bindings.applications).map(([application, b]) => { check(/^[a-z][a-z0-9-]{0,63}$/.test(application)); return b; }), ...bindings.tenants];
     const seenTenants = new Set();
@@ -136,6 +155,27 @@ function createRuntime(options) {
     for (const grant of auth.grants) { object(grant, ['environment', 'tenant', 'token']); const g = scope({ environment: grant.environment, tenant: grant.tenant }), id = JSON.stringify(g); check(!scopes.has(id) && typeof grant.token === 'string' && /^[\x21-\x7e]{32,4096}$/.test(grant.token)); scopes.add(id); }
   }
   function active() { check(!closed); }
+  async function requestJson(selectedScope, path, method, body, validate, maxBytes = 4 * 1024 * 1024) {
+    active(); startupDeadline ??= Date.now() + 30000; const remaining = startupDeadline - Date.now(); check(remaining > 0);
+    const controller = new AbortController(); controllers.add(controller); const timeout = setTimeout(() => controller.abort(), remaining);
+    try {
+      const grant = auth.grants.find(g => g.environment === selectedScope.environment && g.tenant === selectedScope.tenant);
+      const token = options.credentialSupplier ? await abortable(Promise.resolve().then(() => options.credentialSupplier(Object.freeze({ ...selectedScope }))), AbortSignal.any([controller.signal, AbortSignal.timeout(5000)])) : grant?.token;
+      check(typeof token === 'string' && /^[\x21-\x7e]{32,4096}$/.test(token));
+      for (let attempt = 0; attempt < 3; attempt++) {
+        active(); let response;
+        try {
+          response = await fetcher(base + path, { method, redirect: 'error', cache: 'no-store', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-vault-environment': selectedScope.environment, 'x-vault-tenant': selectedScope.tenant }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+        } catch { if (attempt === 2 || controller.signal.aborted) throw unavailable(); await delay(250 * (attempt + 1), controller.signal); continue; }
+        if (response.status === 503 && attempt < 2) { await response.body?.cancel(); await delay(250 * (attempt + 1), controller.signal); continue; }
+        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) { await response.body?.cancel(); throw unavailable(); }
+        const reader = response.body?.getReader(); check(reader); const chunks = []; let size = 0;
+        try { for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; check(size <= maxBytes); chunks.push(Buffer.from(part.value)); } } finally { await reader.cancel().catch(() => undefined); }
+        const result = validate(JSON.parse(Buffer.concat(chunks).toString('utf8'))); active(); return result;
+      }
+      throw unavailable();
+    } catch { throw unavailable(); } finally { clearTimeout(timeout); controllers.delete(controller); }
+  }
   async function load(scopeInput, requestInput) {
     active(); check(strategy === 'LOCAL_KEYVAULT');
     const selectedScope = scope(scopeInput), request = parseSnapshotRequest(requestInput);
@@ -144,43 +184,70 @@ function createRuntime(options) {
     const id = JSON.stringify([selectedScope, request.bindingDigest]);
     if (cache.has(id)) return cache.get(id);
     if (pending.has(id)) return pending.get(id);
-    const operation = (async () => {
-      startupDeadline ??= Date.now() + 30000; const remaining = startupDeadline - Date.now(); check(remaining > 0);
-      const controller = new AbortController(); controllers.add(controller); const timeout = setTimeout(() => controller.abort(), remaining);
-      try {
-        const grant = auth.grants.find(g => g.environment === selectedScope.environment && g.tenant === selectedScope.tenant);
-        const token = options.credentialSupplier ? await abortable(Promise.resolve().then(() => options.credentialSupplier(Object.freeze({ ...selectedScope }))), AbortSignal.any([controller.signal, AbortSignal.timeout(5000)])) : grant?.token;
-        check(typeof token === 'string' && /^[\x21-\x7e]{32,4096}$/.test(token));
-        for (let attempt = 0; attempt < 3; attempt++) {
-          active(); let response;
-          try {
-            response = await fetcher(base + '/local/runtime-snapshot', { method: 'POST', redirect: 'error', cache: 'no-store', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-vault-environment': selectedScope.environment, 'x-vault-tenant': selectedScope.tenant }, body: JSON.stringify(request) });
-          } catch { if (attempt === 2 || controller.signal.aborted) throw unavailable(); await delay(250 * (attempt + 1), controller.signal); continue; }
-          if (response.status === 503 && attempt < 2) { await response.body?.cancel(); await delay(250 * (attempt + 1), controller.signal); continue; }
-          if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) { await response.body?.cancel(); throw unavailable(); }
-          const reader = response.body?.getReader(); check(reader); const chunks = []; let size = 0;
-          try { for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; check(size <= 4 * 1024 * 1024); chunks.push(Buffer.from(part.value)); } } finally { await reader.cancel().catch(() => undefined); }
-          const raw = JSON.parse(Buffer.concat(chunks).toString('utf8')), snapshot = validateSnapshot(raw, selectedScope, request); active(); cache.set(id, snapshot); return snapshot;
-        }
-        throw unavailable();
-      } finally { clearTimeout(timeout); controllers.delete(controller); }
-    })().catch(() => { throw unavailable(); });
+    const operation = requestJson(selectedScope, '/local/runtime-snapshot', 'POST', request, raw => validateSnapshot(raw, selectedScope, request)).then(snapshot => { active(); cache.set(id, snapshot); return snapshot; });
     pending.set(id, operation); try { return await operation; } finally { pending.delete(id); }
+  }
+  function manifest(application, selectedScope, revision) {
+    active(); check(typeof application === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(application));
+    const id = JSON.stringify([application, selectedScope, revision ?? 'current']);
+    if (!manifestPromises.has(id)) manifestPromises.set(id, requestJson(selectedScope, '/local/runtime-manifests/' + application + (revision === undefined ? '' : '/' + revision), 'GET', undefined, raw => {
+      const result = parseRuntimeManifest(raw);
+      check(result.application === application && result.scope.environment === selectedScope.environment && result.scope.tenant === selectedScope.tenant && (revision === undefined || result.request.bindingRevision === revision));
+      return freeze(result);
+    }, 131072));
+    return manifestPromises.get(id);
+  }
+  async function processBinding(application) {
+    if (!discovery) { check(own(bindings.applications, application)); return bindings.applications[application]; }
+    if (activeApplication === undefined) activeApplication = application;
+    check(activeApplication === application);
+    if (!own(bindings.applications, application)) {
+      const m = await manifest(application, { environment: manifestEnvironment, tenant: '_shared' });
+      active(); bindings.applications[application] = { scope: m.scope, request: m.request };
+    }
+    return bindings.applications[application];
+  }
+  async function tenantBinding(tenant, revision) {
+    part(tenant); check(tenant !== '_shared' && Number.isSafeInteger(revision) && revision > 0);
+    if (!discovery) { const b = bindings.tenants.find(b => b.scope.tenant === tenant); check(b && b.request.bindingRevision === revision); return b; }
+    check(activeApplication !== undefined);
+    const parent = await manifest(activeApplication, { environment: manifestEnvironment, tenant: '_shared' });
+    const ref = parent.tenants.find(t => t.tenant === tenant); check(ref && ref.bindingRevision === revision);
+    const m = await manifest(activeApplication, { environment: manifestEnvironment, tenant }, revision);
+    check(m.request.bindingDigest === ref.bindingDigest);
+    let b = bindings.tenants.find(b => b.scope.tenant === tenant);
+    if (!b) { b = { scope: m.scope, request: m.request }; bindings.tenants.push(b); }
+    return b;
+  }
+  async function loadApplication(application) {
+    active(); check(strategy === 'LOCAL_KEYVAULT'); return freeze(structuredClone(await processBinding(application)));
+  }
+  async function loadBindings(application) {
+    active(); check(strategy === 'LOCAL_KEYVAULT'); await processBinding(application);
+    if (discovery) {
+      if (!bindingPromises.has(application)) bindingPromises.set(application, (async () => {
+        const parent = await manifest(application, { environment: manifestEnvironment, tenant: '_shared' });
+        await Promise.all(parent.tenants.map(ref => tenantBinding(ref.tenant, ref.bindingRevision))); active();
+        return freeze(structuredClone(bindings));
+      })());
+      return bindingPromises.get(application);
+    }
+    return freeze(structuredClone(bindings));
   }
   async function loadProcess(application, policy) {
     active(); check(Array.isArray(policy.allowedMappings) && policy.allowedMappings.length <= 256 && new Set(policy.allowedMappings).size === policy.allowedMappings.length); policy.allowedMappings.forEach(mapping);
     const required = policy.requiredMappings ?? []; check(Array.isArray(required) && required.every(name => policy.allowedMappings.includes(name)));
     if (strategy === 'ENV_VARIABLES') return { strategy, mappings: Object.freeze(Object.fromEntries(policy.allowedMappings.filter(k => env[k] !== undefined).map(k => [k, env[k]]))) };
-    check(own(bindings.applications, application)); const b = bindings.applications[application];
+    const b = await processBinding(application);
     const requestedNames = b.request.secrets.map(s => s.mapping); check(requestedNames.every(k => policy.allowedMappings.includes(k)) && required.every(k => requestedNames.includes(k)));
     const snapshot = await load(b.scope, b.request), mappings = snapshotMappings(snapshot); check(required.every(k => typeof mappings[k] === 'string' && mappings[k].length > 0));
     return Object.freeze({ strategy, mappings, snapshot });
   }
   async function loadTenant(tenant, revision) {
-    active(); check(strategy === 'LOCAL_KEYVAULT'); const b = bindings.tenants.find(b => b.scope.tenant === tenant); check(b && b.request.bindingRevision === revision); return load(b.scope, b.request);
+    active(); check(strategy === 'LOCAL_KEYVAULT'); const b = await tenantBinding(tenant, revision); return load(b.scope, b.request);
   }
-  function close() { closed = true; for (const c of controllers) c.abort(); controllers.clear(); cache.clear(); pending.clear(); if (auth) auth.grants.length = 0; }
-  return Object.freeze({ load, loadProcess, loadTenant, close });
+  function close() { closed = true; for (const c of controllers) c.abort(); controllers.clear(); cache.clear(); pending.clear(); manifestPromises.clear(); bindingPromises.clear(); if (auth) auth.grants.length = 0; }
+  return Object.freeze({ load, loadApplication, loadBindings, loadProcess, loadTenant, close });
 }
 function abortable(promise, signal) { return new Promise((resolve, reject) => { function abort() { reject(unavailable()); } signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); Promise.resolve(promise).then(resolve, () => reject(unavailable())).finally(() => signal.removeEventListener('abort', abort)); }); }
 function delay(ms, signal) { return new Promise((resolve, reject) => { const timer = setTimeout(done, ms); function done() { signal.removeEventListener('abort', abort); resolve(); } function abort() { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(unavailable()); } signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); }); }
@@ -190,3 +257,5 @@ exports.bindingDigest = bindingDigest;
 exports.parseSnapshotRequest = parseSnapshotRequest;
 exports.snapshotMappings = snapshotMappings;
 exports.createSecretsRuntime = createSecretsRuntime;
+
+exports.parseRuntimeManifest = parseRuntimeManifest;

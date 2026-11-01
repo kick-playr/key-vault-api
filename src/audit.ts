@@ -35,6 +35,11 @@ export type AuditRequest = Request & { vaultScope?: Scope; vaultGrantIds?: strin
 export function auditOperation(method: string, path: string): Operation | undefined {
   if (method === 'HEAD') method = 'GET';
   path = path.replace(/^\/namespaces\/[^/]+\/[^/]+(?=\/)/i, '').replace(/\/$/, '');
+  if (/^\/local\/runtime-manifests\/[^/]+(?:\/[^/]+)?$/i.test(path)) {
+    if (method === 'GET') return { category: 'read', action: 'local.runtime-manifests.get' };
+    if (method === 'PUT' && /^\/local\/runtime-manifests\/[^/]+$/i.test(path)) return { category: 'write', action: 'local.runtime-manifests.publish' };
+    return;
+  }
   const local = /^\/local\/(session|key-tree|inventory|snapshot|runtime-snapshot|reconcile)$/i.exec(path);
   if (local) {
     const route = local[1]!.toLowerCase();

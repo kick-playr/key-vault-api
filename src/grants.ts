@@ -29,6 +29,18 @@ function stored(input: Grant): StoredGrant {
 }
 export class GrantService {
   constructor(private readonly store: MongoStore) {}
+  /** Create one complete local consumer credential set in a single registry CAS. */
+  async createReadGrants(scopes: Scope[]) {
+    if (!Array.isArray(scopes) || scopes.length < 1 || scopes.length > 33) fail(400, 'InvalidGrants');
+    const validated = scopes.map(scope => ({ environment: scopePart(scope?.environment), tenant: scopePart(scope?.tenant) }));
+    if (new Set(validated.map(scope => JSON.stringify(scope))).size !== validated.length) fail(400, 'InvalidGrants');
+    const issued = validated.map(scope => ({ ...scope, token: randomBytes(32).toString('base64url') }));
+    const candidates = issued.map(grant => stored({ ...grant, permissions: ['read', 'list'] }));
+    return this.store.transactionGrants(grants => {
+      grants.push(...candidates);
+      return { schemaVersion: 1 as const, grants: issued };
+    });
+  }
   async create(scope: Scope, permissions: unknown) {
     const token = randomBytes(32).toString('base64url');
     const grant = stored({ ...scope, permissions: validatePermissions(permissions), token });

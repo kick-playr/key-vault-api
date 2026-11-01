@@ -11,6 +11,7 @@ const entry = {
 };
 const obj = (properties: SchemaObject['properties'], required: string[] = []): SchemaObject => ({ type: 'object', additionalProperties: false, properties, ...(required.length ? { required } : {}) });
 export const schemas: Record<string, SchemaObject> = {
+  RuntimeManifest: obj({ schemaVersion: { type: 'integer', enum: [1] }, application: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$' }, scope: obj({ environment: text, tenant: text }, ['environment', 'tenant']), request: ref('RuntimeSnapshotRequest'), tenants: { type: 'array', maxItems: 32, items: obj({ tenant: text, bindingRevision: { type: 'integer', minimum: 1 }, bindingDigest: text }, ['tenant', 'bindingRevision', 'bindingDigest']) } }, ['schemaVersion', 'application', 'scope', 'request', 'tenants']),
   KeyTreeNode: obj({ name: text, children: { type: 'array', items: ref('KeyTreeNode') }, envName: text, secretName: text, id: { type: 'string', format: 'uri' }, version: text, versionId: { type: 'string', format: 'uri' }, attributes: ref('Attributes') }, ['name']),
   TenantKeyTree: obj({ environment: text, tenant: text, keySets: { type: 'array', items: obj({ name: text, profile: text, children: { type: 'array', items: ref('KeyTreeNode') } }, ['name', 'profile', 'children']) } }, ['environment', 'tenant', 'keySets']),
   Session: obj({ authenticated: { type: 'boolean', enum: [true] }, environment: text, tenant: text }, ['authenticated', 'environment', 'tenant']),

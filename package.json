@@ -1,6 +1,6 @@
 {
   "name": "@kick-playr/local-key-vault",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "NestJS local development vault with an explicit Azure Key Vault REST subset",
   "engines": {
@@ -12,6 +12,7 @@
     "start": "node dist/main.js",
     "start:dev": "npm run build && node dist/main.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+    "test:oauth": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.oauth.config.cjs --runInBand",
     "test:audit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.audit.config.cjs --runInBand",
     "maint:update": "ncu -u -t minor && npm install && npm audit fix --audit-level moderate && npm install",
     "test:discovery": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.discovery.config.cjs --runInBand",

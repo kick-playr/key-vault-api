@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "environment": "development",
+  "applications": {
+    "club-api": {
+      "bindingRevision": 3,
+      "secrets": [
+        {
+          "mapping": "TENANT_CONTROL_MONGODB_URI",
+          "purpose": "club-api-control-mongodb-uri",
+          "version": "69f7dde2cb894e58837ab63c96035d9c"
+        },
+        {
+          "mapping": "WORKFLOW_SHARED_WRAPPING_KEY_V1",
+          "purpose": "workflow-shared-wrapping-key-v1",
+          "version": "832c10b1991d4ac1baa3f5ec80082ae7"
+        },
+        {
+          "mapping": "MANAGER_SETUP_CONTROL_KEY",
+          "purpose": "manager-setup-control-key",
+          "version": "6a7f1ad7a87a46eb8db71eac47779ecd"
+        },
+        {
+          "mapping": "WORKFLOW_PROXY_KEY",
+          "purpose": "workflow-proxy-key",
+          "version": "75682d2ae2b040b282355ce3aa96b165"
+        },
+        {
+          "mapping": "REDIS_URL",
+          "purpose": "workflow-redis-url",
+          "version": "cca0046a82884c20b3e05bf2646fc2dd"
+        }
+      ]
+    },
+    "app": {
+      "bindingRevision": 3,
+      "secrets": [
+        {
+          "mapping": "CLERK_SECRET_KEY",
+          "purpose": "app-clerk-secret-key",
+          "version": "acd7346297f340ce961503f252980930"
+        },
+        {
+          "mapping": "CLERK_ENCRYPTION_KEY",
+          "purpose": "app-clerk-encryption-key",
+          "version": "3b65632396e643d6b735dd8fd90e60ba"
+        }
+      ]
+    },
+    "explorer-api": {
+      "bindingRevision": 2,
+      "secrets": [
+        {
+          "mapping": "CLERK_SECRET_KEY",
+          "purpose": "explorer-clerk-secret-key",
+          "version": "f9185cf52c204ec2b109bc63cd66d3cc"
+        },
+        {
+          "mapping": "EXPLORER_CREDENTIAL_KEY",
+          "purpose": "explorer-credential-key",
+          "version": "d0c40074389d4214bf63476c6c922beb"
+        },
+        {
+          "mapping": "EXPLORER_MONGODB_URI",
+          "purpose": "explorer-mongodb-uri",
+          "version": "7b92eb3fb4b44c5d96020498bd26006f"
+        },
+        {
+          "mapping": "MANAGER_SETUP_CONTROL_KEY",
+          "purpose": "manager-setup-control-key",
+          "version": "6a7f1ad7a87a46eb8db71eac47779ecd"
+        },
+        {
+          "mapping": "WORKFLOW_SHARED_WRAPPING_KEY_V1",
+          "purpose": "workflow-shared-wrapping-key-v1",
+          "version": "832c10b1991d4ac1baa3f5ec80082ae7"
+        }
+      ]
+    }
+  },
+  "tenants": [
+    {
+      "tenant": "fcrww",
+      "bindingRevision": 3,
+      "keySets": [
+        {
+          "reference": "workflow-local:fcrww:key",
+          "mappings": {
+            "wrapping": "WORKFLOW_REAL_FCRWW_WRAPPING_KEY_V1",
+            "index": "WORKFLOW_REAL_FCRWW_INDEX_KEY",
+            "control": "WORKFLOW_REAL_FCRWW_CONTROL_KEY"
+          },
+          "wrappingVersions": [
+            {
+              "keyVersion": "v1",
+              "vaultVersion": "a49d3e8c99a2466a807676c56e3a8a62"
+            }
+          ],
+          "currentWrappingVersion": "v1",
+          "indexVersion": "2917e5240cbe450680a1c5720ada04dc",
+          "controlVersion": "d6effbd1b3504e01b8f823a79b9f0d23"
+        }
+      ],
+      "secrets": [
+        {
+          "mapping": "MONGODB_URI",
+          "purpose": "fcrww-mongodb-uri",
+          "version": "764043ea310c45818c967ae2b2add7ea"
+        },
+        {
+          "mapping": "CLERK_SECRET_KEY",
+          "purpose": "fcrww-clerk-secret-key",
+          "version": "da50a1e547124b109666800396bb897b"
+        }
+      ]
+    }
+  ]
+}

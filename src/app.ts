@@ -18,6 +18,8 @@ import { TenantKeyTreeService } from './tenant-key-tree.js';
 import { InventoryService } from './inventory.js';
 import { AuditService, AuditRequest, auditDestinations } from './audit.js';
 
+import { OAuthCredentialService } from './oauth-credentials.js';
+
 type ScopedRequest = AuditRequest & { vaultScope: Scope };
 const Permissions = (...permissions: Permission[]) => SetMetadata('vault-permissions', permissions);
 @Catch()
@@ -43,6 +45,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const audit = new AuditService(auditDestinations(config.audit), store);
   const vault = new VaultService(store, config.baseUrl.replace(/\/$/, ''));
   const provisioning = new ProvisioningService(vault);
+  const oauthCredentials = new OAuthCredentialService(store);
   const runtimeManifests = new RuntimeManifestService(store);
   const runtimeSnapshots = new RuntimeSnapshotService(vault);
   const keyTree = new TenantKeyTreeService(vault);
@@ -95,6 +98,18 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Runtime', 'Read current or explicitly pinned runtime manifest metadata', 'read', 'RuntimeManifest', undefined, true)
     @Get(['local/runtime-manifests/:application', 'local/runtime-manifests/:application/:revision']) @Permissions('read')
     getRuntimeManifest(@Req() req: ScopedRequest, @Param('application') application: string, @Param('revision') revision?: string) { return runtimeManifests.get(req.vaultScope, application, revision); }
+    @VaultEndpoint('Runtime', 'OAuth credential enroll', 'write', 'OAuthResult', 'OAuthEnroll', true)
+    @Post('local/oauth-credentials/enroll') @HttpCode(200) @Permissions('write')
+    oauthEnroll(@Req() req: ScopedRequest, @Body() body: unknown) { return oauthCredentials.enroll(req.vaultScope, body); }
+    @VaultEndpoint('Runtime', 'OAuth credential read', 'read', 'OAuthResult', 'OAuthRead', true)
+    @Post('local/oauth-credentials/read') @HttpCode(200) @Permissions('read')
+    oauthRead(@Req() req: ScopedRequest, @Body() body: unknown) { return oauthCredentials.read(req.vaultScope, body); }
+    @VaultEndpoint('Runtime', 'OAuth credential begin', 'renew', 'OAuthResult', 'OAuthBegin', true)
+    @Post('local/oauth-credentials/begin') @HttpCode(200) @Permissions('renew')
+    oauthBegin(@Req() req: ScopedRequest, @Body() body: unknown) { return oauthCredentials.begin(req.vaultScope, body); }
+    @VaultEndpoint('Runtime', 'OAuth credential commit', 'renew', 'OAuthResult', 'OAuthCommit', true)
+    @Post('local/oauth-credentials/commit') @HttpCode(200) @Permissions('renew')
+    oauthCommit(@Req() req: ScopedRequest, @Body() body: unknown) { return oauthCredentials.commit(req.vaultScope, body); }
     @VaultEndpoint('Secrets', 'Set a secret and create a new version', 'write', 'SecretBundle', 'SetSecret')
     @Put('secrets/:name') @HttpCode(200)
     set(@Req() req: ScopedRequest, @Param('name') name: string, @Body() body: unknown) { return vault.create(req.vaultScope, 'secrets', name, body); }

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "purpose": "fcrww-mongodb-uri",
+      "kind": "secret",
+      "scope": "tenant",
+      "envName": "MONGODB_URI"
+    },
+    {
+      "purpose": "fcrww-clerk-secret-key",
+      "kind": "secret",
+      "scope": "tenant",
+      "envName": "CLERK_SECRET_KEY"
+    }
+  ]
+}

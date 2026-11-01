@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "purpose": "club-api-control-mongodb-uri",
+      "kind": "secret",
+      "scope": "process",
+      "envName": "TENANT_CONTROL_MONGODB_URI"
+    },
+    {
+      "purpose": "workflow-shared-wrapping-key-v1",
+      "kind": "secret",
+      "scope": "process",
+      "envName": "WORKFLOW_SHARED_WRAPPING_KEY_V1"
+    },
+    {
+      "purpose": "manager-setup-control-key",
+      "kind": "secret",
+      "scope": "process",
+      "envName": "MANAGER_SETUP_CONTROL_KEY"
+    },
+    {
+      "purpose": "workflow-proxy-key",
+      "kind": "secret",
+      "scope": "process",
+      "envName": "WORKFLOW_PROXY_KEY"
+    },
+    {
+      "purpose": "workflow-redis-url",
+      "kind": "secret",
+      "scope": "process",
+      "envName": "REDIS_URL"
+    },
+    {
+      "purpose": "app-clerk-secret-key",
+      "kind": "secret",
+      "scope": "process",
+      "envName": "CLERK_SECRET_KEY"
+    },
+    {
+      "purpose": "app-clerk-encryption-key",
+      "kind": "secret",
+      "scope": "process",
+      "envName": "CLERK_ENCRYPTION_KEY"
+    }
+  ]
+}

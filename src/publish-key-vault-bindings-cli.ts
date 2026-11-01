@@ -2,7 +2,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { RuntimeManifest } from '@kick-playr/local-key-vault/runtime-client';
-import { createBindings, parsePlan } from './create-key-vault-bindings-cli.js';
+import { createBindings, parsePlan } from './runtime-manifest-plan.js';
 import { loadBootstrapConfig } from './config.js';
 import { fail, formatStartupError } from './errors.js';
 import { MongoStore } from './store.js';

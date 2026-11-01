@@ -1,15 +1,15 @@
-# Generate LOCAL_KEYVAULT_BINDINGS_JSON
+# Publish application startup manifests
 
 ```sh
-./create-key-vault-bindings.sh --plan examples/explorer-api-bindings-plan.json
+./publish-key-vault-bindings.sh --plan examples/explorer-api-bindings-plan.json
 ```
 
 First copy/edit the illustrative plan: its purposes, tenant selection and revision
-are examples, not a discovered configuration. The command prints exactly one
-shell-ready `export LOCAL_KEYVAULT_BINDINGS_JSON='...'` after all reads succeed.
-Copy/source that export in the consumer's server configuration. It never edits
-`.env`. It uses the vault project's bootstrap `.env` to inspect the existing
-encrypted database; neither the running vault API nor new grants are needed.
+are examples, not a discovered configuration. The operator command resolves the
+metadata and publishes it in encrypted vault namespaces; consumers discover it
+during startup. There is no bindings environment export or consumer-side plan file.
+It never edits `.env`. It uses the vault project's bootstrap `.env` to inspect the
+existing encrypted database; the running vault API is not needed for publication.
 This is an operator tool with bootstrap database/master-key access, not a runtime
 consumer API. Encrypted namespace documents are opened in memory; only metadata
 fields are consulted by the generator and returned. No secret values, private
@@ -38,7 +38,7 @@ keys, plaintext/ciphertext payloads or grant tokens are exported or printed.
   Role mappings are derived from validated `envName` metadata; optional explicit
   `mappings` must agree with every selected historical/current version.
 
-With exactly one stored version of a resource, the script can pin it
+With exactly one stored version of a resource, the publisher can pin it
 automatically if active. If it has multiple versions, it stops with
 `AmbiguousVersion`; it never silently chooses newest or skips an inactive version.
 For ordinary secrets, add `"version":"<actual-32-character-vault-version>"`.
@@ -64,26 +64,27 @@ opaque vault version IDs. Disabled/expired/not-yet-active pins fail completely.
 
 ## Validation and limits
 
-The script validates the entire plan structure before opening MongoDB and reads
+The publisher validates the entire plan structure before opening MongoDB and reads
 each namespace once. It verifies deterministic resource names, matching role tags,
 active versions and mapping agreement, then computes canonical binding digests
 with the same runtime client and re-parses every completed snapshot request.
-It never reconciles, initializes, creates, imports, rotates or deletes resources.
+It writes only startup manifest metadata; it never reconciles, initializes,
+creates, imports, rotates or deletes secret/key resources or grants.
 A missing master-key verifier is an error rather than a reason to initialize one.
 Missing resources must be provisioned separately using existing reviewed values.
 
-Output is references/metadata, with no `latest` pins. It does not check secret
+Published descriptors are references/metadata, with no `latest` pins. It does not check secret
 value formats or key-role independence by reading values, authenticate consumer
 grants, validate application-specific required mappings, or validate control-plane
 revisions. Consumers perform those checks on startup. Cross-namespace reads are
 not atomic; later disable/rotation still requires consumer validation and restart.
-No partial export is emitted on failure. Existing process/grant configuration is
-left unchanged. Limits match the runtime contract: 16 applications, 32 tenants and
+Publication ordering and retry behaviour are described below. Existing process
+environment and grant configuration are left unchanged. Limits: 16 applications, 32 tenants and
 100 resolved values per request. Unknown/value-bearing fields are rejected.
-Both the input file and generated bindings must fit within 1 MiB; the latter
-matches the runtime client's configuration parser limit.
+Both the input file and resolved plan must fit within 1 MiB. Each published
+manifest must additionally fit within the server's 64 KiB manifest limit.
 
-`--help` needs no Node.js or database. Run `npm run test:bindings` for pure metadata
+`--help` needs no Node.js or database. Run `npm run test:manifest-plan` for pure metadata
 and fake-driver contracts without starting MongoDB. These tests do not claim a
 live vault/control-database integration pass.
 

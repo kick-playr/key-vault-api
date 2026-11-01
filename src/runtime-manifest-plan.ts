@@ -1,12 +1,8 @@
-import { lstatSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { bindingDigest, parseSnapshotRequest } from '@kick-playr/local-key-vault/runtime-client';
 import type { RuntimeSnapshotRequest, KeySetDescriptor } from '@kick-playr/local-key-vault/runtime-client';
-import { loadBootstrapConfig } from './config.js';
-import { fail, formatStartupError } from './errors.js';
+import { fail } from './errors.js';
 import { vaultName } from './manifest.js';
-import { MongoStore } from './store.js';
+import type { MongoStore } from './store.js';
 import { tenantKeySet } from './tenant-key-tree.js';
 import type { Namespace, Scope, Version } from './types.js';
 import { envName, identifier, object, scopePart } from './validation.js';
@@ -23,7 +19,6 @@ interface TenantPlan extends EntryPlan { tenant: string }
 interface Plan { environment: string; applications: Record<string, EntryPlan>; tenants: TenantPlan[] }
 interface Binding { scope: Scope; request: RuntimeSnapshotRequest }
 export interface Bindings { schemaVersion: 1; applications: Record<string, Binding>; tenants: Binding[] }
-const usage = 'Usage: ./create-key-vault-bindings.sh --plan <metadata-plan.json>';
 const check = (value: unknown) => { if (!value) fail(400, 'InvalidBindingsPlan', 'Check the metadata-only plan schema and explicit positive revisions; see examples/explorer-api-bindings-plan.json.'); };
 function pin(value: unknown): string | undefined {
   if (value === undefined) return;
@@ -136,24 +131,4 @@ export async function createBindings(input: unknown, store: Pick<MongoStore, 're
   const result: Bindings = { schemaVersion: 1, applications, tenants };
   if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) fail(413, 'BindingsTooLarge', 'Generated bindings exceed the runtime client limit of 1 MiB; reduce the selected mappings and namespaces.');
   return result;
-}
-export async function runBindingsPlan(plan: unknown, store: Pick<MongoStore, 'read'>, output: (line: string) => void = console.log) {
-  const bindings = await createBindings(plan, store);
-  output(`export LOCAL_KEYVAULT_BINDINGS_JSON='${JSON.stringify(bindings).replaceAll("'", "'\\''")}'`);
-}
-async function main() {
-  const args = process.argv.slice(2);
-  if (args.length !== 2 || args[0] !== '--plan' || !args[1]) fail(400, 'InvalidCommand', usage);
-  let input: unknown;
-  try {
-    const stat = lstatSync(args[1]);
-    if (!stat.isFile() || stat.size > 1024 * 1024) throw Error();
-    input = JSON.parse(readFileSync(args[1], 'utf8'));
-  } catch { fail(400, 'InvalidBindingsPlan', 'Supply a regular metadata-only JSON plan file, at most 1 MiB.'); }
-  parsePlan(input); // Validate before opening the vault database.
-  const store = await MongoStore.open(loadBootstrapConfig(resolve(dirname(fileURLToPath(import.meta.url)), '../.env')), { createVerifier: false });
-  try { await runBindingsPlan(input, store); } finally { await store.close(); }
-}
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void main().catch(error => { process.stderr.write(`[key-vault-bindings] ${formatStartupError(error)}\n`); process.exitCode = 1; });
 }

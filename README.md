@@ -33,60 +33,14 @@ Supply the following bootstrap values:
 | `VAULT_BASE_URL` | no | Default `http://127.0.0.1:4000`; only loopback HTTP is accepted |
 | `VAULT_AUDIT_DESTINATIONS` | no | JSON routing per operation category; defaults write/crypto to MongoDB and read/list to console. See [audit logging](docs/AUDIT.md). |
 
-Every shell script supports `--help` (or `-h`) with its own usage, arguments and examples, without compiling or connecting to MongoDB: `./create-key.sh --help`, `./create-grants.sh --help`, `./create-key-vault-grants.sh --help`, `./migrate-grants.sh --help`, `./rotate.sh --help`, `./grants.sh --help`, `./import-fcrww-keys.sh --help`, and `./create-tenant-keys.sh --help`.
+Every shell script supports `--help` (or `-h`) with its own usage, arguments and examples, without compiling or connecting to MongoDB: `./create-key.sh --help`, `./create-grants.sh --help`, `./migrate-grants.sh --help`, `./rotate.sh --help`, `./grants.sh --help`, `./import-fcrww-keys.sh --help`, and `./create-tenant-keys.sh --help`.
 
-### Generate a consumer's LOCAL_KEYVAULT_AUTH_JSON
+### Configure simple vault startup
 
-From the vault API checkout, create a fresh read-only grant for each requested
-club namespace and optionally `_shared`:
-
-```sh
-./create-key-vault-grants.sh --clubs "fcrww,fcuster" --shared
-```
-
-The only stdout line is a shell-ready export containing the real generated tokens:
-
-```sh
-export LOCAL_KEYVAULT_AUTH_JSON='{"schemaVersion":1,"grants":[{"environment":"development","tenant":"_shared","token":"<generated-token>"},{"environment":"development","tenant":"fcrww","token":"<generated-token>"},{"environment":"development","tenant":"fcuster","token":"<generated-token>"}]}'
-```
-
-Copy the generated export into the consuming server's private configuration or
-source it in the shell that launches that server. The script cannot set variables
-in its parent shell and does not edit any `.env`. Its output contains credentials;
-keep it private. Compilation/errors go to stderr. It uses the vault project's
-bootstrap `.env` and existing MongoDB; it does not call or start the API service.
-
-`--environment` defaults to `development`, matching LOCAL_KEYVAULT consumers;
-use `--environment dev` or `--environment test` only when bindings use that exact
-namespace. `--shared` alone and `--clubs "fcrww"` alone are supported. Whitespace
-is trimmed, duplicate clubs are removed, empty/invalid IDs or repeated flags are
-rejected, and at most 32 clubs plus `_shared` are allowed. Use `--shared` rather
-than including `_shared` in `--clubs`.
-
-All grants are committed atomically before printing credentials. They have only
-`read` permission. Run separately for each consumer; each invocation creates new
-tokens and leaves old grants valid until explicitly revoked through `grants.sh`.
-This does not provision secrets, create runtime bindings or rotate keys. Scope
-permissions apply to the complete namespace, including `_shared`.
-
-Run `npm run test:grant-export` for pure parser, credential-format, permission and
-atomic-write contract tests using an in-memory registry, without starting MongoDB.
-
-### Generate LOCAL_KEYVAULT_BINDINGS_JSON
-
-Copy/edit [the Explorer API metadata plan](examples/explorer-api-bindings-plan.json)
-to match your provisioned purposes, tenant revisions and application key labels:
-
-```sh
-./create-key-vault-bindings.sh --plan examples/explorer-api-bindings-plan.json
-```
-
-The command prints a shell-ready export with immutable version pins and canonical
-digests. It reads existing metadata, does not initialize or modify vault resources,
-and fails on missing entries, inactive versions or ambiguous rotations. Plans never
-contain values or tokens. See [binding generation](docs/BINDINGS.md) for required
-operator choices, explicit historical pins, consumer validation and limitations.
-This complements the grants script; it does not replace runtime read grants.
+Consumers authenticate with their scoped grants and discover published application
+manifests directly from the vault. They do not need generated bindings environment
+variables. Use the existing `grants.sh` administration commands for access, and
+[the one-time manifest publisher](docs/BINDINGS.md) to configure references.
 
 Create the first persisted grant (MongoDB must be running):
 

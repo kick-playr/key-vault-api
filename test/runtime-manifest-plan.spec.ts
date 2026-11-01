@@ -1,7 +1,4 @@
 import { existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { parseEnv } from 'node:util';
 import { bindingDigest, parseSnapshotRequest } from '@kick-playr/local-key-vault/runtime-client';
 import { emptyNamespace } from '../src/types.js';
 import { vaultName } from '../src/manifest.js';
@@ -29,8 +26,8 @@ function fixture() {
 }
 
 async function api() {
-  expect(existsSync(new URL('../src/create-key-vault-bindings-cli.ts', import.meta.url))).toBe(true);
-  return import('../src/create-key-vault-bindings-cli.js');
+  expect(existsSync(new URL('../src/runtime-manifest-plan.ts', import.meta.url))).toBe(true);
+  return import('../src/runtime-manifest-plan.js');
 }
 it('pins unambiguous metadata, derives mappings and computes canonical digests without reading secrets', async () => {
   const tool = await api(), f = fixture();
@@ -79,19 +76,10 @@ it('rejects malformed, foreign or value-bearing plans before any database reads'
   }
 });
 
-it('prints exactly one ENV export after complete success and none after a missing resource', async () => {
-  const tool = await api(), f = fixture(), output: string[] = [];
-  await tool.runBindingsPlan(f.plan, f.store as any, line => output.push(line));
-  expect(output).toHaveLength(1);
-  expect(output[0]).toMatch(/^export LOCAL_KEYVAULT_BINDINGS_JSON='/);
-  const result = JSON.parse(parseEnv(output[0]!).LOCAL_KEYVAULT_BINDINGS_JSON!);
-  expect(result.tenants[0].request.bindingRevision).toBe(2);
+it('rejects a missing required resource rather than producing partial manifest metadata', async () => {
+  const tool = await api(), f = fixture();
   delete f.tenant.secrets[f.layout.entries[1]!.name];
-  const failed: string[] = [];
-  await expect(tool.runBindingsPlan(f.plan, f.store as any, line => failed.push(line))).rejects.toThrow();
-  expect(failed).toEqual([]);
-  const help = execFileSync('/bin/sh', [fileURLToPath(new URL('../create-key-vault-bindings.sh', import.meta.url)), '--help'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
-  expect(help).toContain('--plan');
+  await expect(tool.createBindings(f.plan, f.store as any)).rejects.toThrow();
 });
 
 it('refuses initializing missing vault metadata while preserving ordinary store initialization', async () => {

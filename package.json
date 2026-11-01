@@ -13,11 +13,10 @@
     "start:dev": "npm run build && node dist/main.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:audit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.audit.config.cjs --runInBand",
-    "test:grant-export": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.grant-export.config.cjs --runInBand",
-    "test:bindings": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.bindings.config.cjs --runInBand",
     "maint:update": "ncu -u -t minor && npm install && npm audit fix --audit-level moderate && npm install",
     "test:discovery": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.discovery.config.cjs --runInBand",
-    "test:runtime-manifests": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.runtime-manifests.config.cjs --runInBand"
+    "test:runtime-manifests": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.runtime-manifests.config.cjs --runInBand",
+    "test:manifest-plan": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.manifest-plan.config.cjs --runInBand"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",

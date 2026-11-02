@@ -34,6 +34,7 @@ export const isDocumentationRequest = (method: string, path: string) => ['GET', 
 export function setupSwagger(app: INestApplication, baseUrl: string) {
   const config = new DocumentBuilder().setTitle('Key Vault API').setVersion('0.1.0')
     .setDescription('Local development Azure Key Vault REST subset, API version 2025-07-01. Local bearer grants replace Entra ID. Deletion permanently removes all versions. Version lists are unpaginated. Keys remain non-exportable. Tenant values belong in tenant-scoped server runtime snapshots, never browser bundles. Select the matching environment and tenant headers for every API request.')
+    .addTag('Applications', 'Editable application models and canonical resource associations. Metadata only; saved links are not runtime adoption.')
     .addTag('Provisioning', 'Start here: automatically provision manifest-defined keys and supplied secrets. Revisioned reconciliation is idempotent and requires read and write permissions.')
     .addTag('Runtime', 'Load complete validated mappings for a tenant/environment before initializing application clients. Requires read permission.')
     .addTag('Connection', 'Authenticate a caller token for one namespace without requiring list, read, write or crypto permission.')

@@ -11,6 +11,20 @@ const entry = {
 };
 const obj = (properties: SchemaObject['properties'], required: string[] = []): SchemaObject => ({ type: 'object', additionalProperties: false, properties, ...(required.length ? { required } : {}) });
 export const schemas: Record<string, SchemaObject> = {
+  ApplicationInUse: obj({valid:{type:'boolean'}},['valid']),
+  ApplicationInUseSelector: obj({resources:{type:'array',maxItems:100,items:obj({name:text,version:text},['name','version'])}},['resources']),
+  EmptyObject: { type: 'object', additionalProperties: false },
+  ApplicationDescriptor: { type: 'object', description: 'Version 2 namespace-scoped exact resource references, canonical ENV mappings, classification and validity attributes; no values. Digest excludes unrelated namespace generation.' },
+  ApplicationValueSnapshot: { type: 'object', description: 'Version 2 coherent descriptor with secret values. Runtime-only; never exposed through the browser proxy.' },
+  ApplicationSnapshotSelector: obj({generation:{type:'integer',minimum:0},digest:{type:'string',pattern:'^[a-f0-9]{64}$'}},['generation','digest']),
+  ApplicationRegistration: obj({instanceId:text,proof:text,expiresAt:{type:'integer'}},['instanceId','proof','expiresAt']),
+  ApplicationAcknowledgement: obj({instanceId:text,proof:text,generation:{type:'integer',minimum:0},digest:text,status:{type:'string',enum:['applied','warning','blocked','updating']}},['instanceId','proof','generation','digest','status']),
+  ApplicationAcknowledged: obj({accepted:{type:'boolean'},expiresAt:{type:'integer'}},['accepted','expiresAt']),
+  ApplicationRuntimeStatus: {type:'object',description:'Bounded reported instances, last seen and adoption state. No caller credentials or instance proofs; self reports are not security attestations.'},
+  ApplicationRevision: obj({ expectedRevision: { type: 'integer', minimum: 0 } }, ['expectedRevision']),
+  ApplicationSave: obj({ expectedRevision: { type: 'integer', minimum: 0 }, displayName: { type: 'string', minLength: 1, maxLength: 128 }, description: { type: 'string', maxLength: 512 } }, ['expectedRevision', 'displayName']),
+  ApplicationLink: obj({ expectedRevision: { type: 'integer', minimum: 0 }, envName: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,127}$' }, version: { type: 'string', description: 'latest or an exact immutable 32-character hexadecimal version' } }, ['expectedRevision', 'envName', 'version']),
+  Applications: obj({ revision: { type: 'integer', minimum: 0 }, generation: { type: 'integer', minimum: 0 }, environment: text, tenant: text, applications: { type: 'array', maxItems: 100, items: { type: 'object', description: 'Application identity, displayName, description, supported contract flag and metadata-only resources with canonical envName, Latest/pin, tags and memberships. runtimeStatus is not-connected until activation is integrated.' } } }, ['revision', 'generation', 'environment', 'tenant', 'applications']),
   OAuthEnroll: obj({ application: { type: 'string', enum: ['club-api'] }, mapping: { type: 'string', pattern: '^RUNTIME_CREDENTIAL_[A-Z0-9_]{1,100}$' }, provider: { type: 'string', enum: ['bexio', 'dropbox'] } }, ['application', 'mapping', 'provider']),
   OAuthRead: obj({ application: { type: 'string', enum: ['club-api'] }, mapping: { type: 'string', pattern: '^RUNTIME_CREDENTIAL_[A-Z0-9_]{1,100}$' }, provider: { type: 'string', enum: ['bexio', 'dropbox'] }, bindingRevision: { type: 'integer', minimum: 1 }, bindingDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' }, version: text }, ['application', 'mapping', 'provider', 'bindingRevision', 'bindingDigest', 'version']),
   OAuthBegin: obj({ application: { type: 'string', enum: ['club-api'] }, mapping: { type: 'string', pattern: '^RUNTIME_CREDENTIAL_[A-Z0-9_]{1,100}$' }, provider: { type: 'string', enum: ['bexio', 'dropbox'] }, bindingRevision: { type: 'integer', minimum: 1 }, bindingDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' }, expectedVersion: text, operationId: { type: 'string', format: 'uuid' } }, ['application', 'mapping', 'provider', 'bindingRevision', 'bindingDigest', 'expectedVersion', 'operationId']),

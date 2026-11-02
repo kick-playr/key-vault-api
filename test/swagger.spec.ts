@@ -11,6 +11,8 @@ describe('live Swagger documentation', () => {
     await request(f.app.getHttpServer()).get('/docs/swagger-ui.css').expect(200);
     await request(f.app.getHttpServer()).get('/docs/swagger-ui-init.js').expect(200);
     const { body: doc } = await request(f.app.getHttpServer()).get('/docs-json').expect(200);
+    expect(doc.paths['/local/applications'].get.tags).toEqual(['Applications']);
+    expect(doc.paths['/local/applications/{application}/resources/{kind}/{name}'].put.requestBody.content['application/json'].schema.$ref).toBe('#/components/schemas/ApplicationLink');
     expect(doc.info.title).toBe('Key Vault API');
     expect(doc.components.securitySchemes.bearer).toMatchObject({ type: 'http', scheme: 'bearer' });
     expect(JSON.stringify(doc)).not.toContain(token);

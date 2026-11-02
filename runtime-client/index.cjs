@@ -259,3 +259,5 @@ exports.snapshotMappings = snapshotMappings;
 exports.createSecretsRuntime = createSecretsRuntime;
 
 exports.parseRuntimeManifest = parseRuntimeManifest;
+exports.createApplicationRuntime = require('./application-client.cjs').createApplicationRuntime;
+exports.parseApplicationDescriptor = require('./application-client.cjs').parseApplicationDescriptor;

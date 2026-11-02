@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import { createHash } from 'node:crypto';
+import { ApplicationRuntimeService } from './application-runtime.js';
 import { ArgumentsHost, Body, CanActivate, Catch, Controller, Delete, ExceptionFilter, ExecutionContext, Get, HttpCode, INestApplication, Module, Param, Patch, Post, Put, Query, Req, SetMetadata, UseGuards } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NextFunction, Request, Response, json } from 'express';
@@ -18,6 +20,7 @@ import { TenantKeyTreeService } from './tenant-key-tree.js';
 import { InventoryService } from './inventory.js';
 import { AuditService, AuditRequest, auditDestinations } from './audit.js';
 
+import { ApplicationsService } from './applications.js';
 import { OAuthCredentialService } from './oauth-credentials.js';
 
 type ScopedRequest = AuditRequest & { vaultScope: Scope };
@@ -49,6 +52,9 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const runtimeManifests = new RuntimeManifestService(store);
   const runtimeSnapshots = new RuntimeSnapshotService(vault);
   const keyTree = new TenantKeyTreeService(vault);
+  const applications = new ApplicationsService(store);
+  const applicationRuntime = new ApplicationRuntimeService(store);
+  const runtimeCaller = (req: ScopedRequest) => createHash('sha256').update(JSON.stringify([...(req.vaultGrantIds ?? [])].sort())).digest('hex');
   const inventory = new InventoryService(vault, config.masterKey);
   class HandlerPermissions implements CanActivate {
     async canActivate(context: ExecutionContext) {
@@ -83,6 +89,44 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Inventory', 'Search combined key and secret metadata within one namespace', 'list', 'Inventory', undefined, true)
     @InventoryQueries(true) @Get('local/inventory') @Permissions('list')
     search(@Req() req: ScopedRequest, @Query() query: unknown) { return inventory.list(req.vaultScope, 'local/inventory', query); }
+    @VaultEndpoint('Runtime', 'Resolve current application links to exact versions; metadata only', 'read', 'ApplicationDescriptor', undefined, true)
+    @Get('local/application-runtime/:application/desired') @Permissions('read')
+    applicationDesired(@Req() req: ScopedRequest, @Param('application') application: string) { return applicationRuntime.desired(req.vaultScope,application); }
+    @VaultEndpoint('Runtime', 'Read an exact coherent application snapshot without provisioning', 'read', 'ApplicationValueSnapshot', 'ApplicationSnapshotSelector', true)
+    @Post('local/application-runtime/:application/snapshot') @HttpCode(200) @Permissions('read')
+    applicationValueSnapshot(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { return applicationRuntime.snapshot(req.vaultScope,application,body); }
+    @VaultEndpoint('Runtime', 'Check that retained in-use versions remain permitted', 'read', 'ApplicationInUse', 'ApplicationInUseSelector', true)
+    @Post('local/application-runtime/:application/in-use') @HttpCode(200) @Permissions('read')
+    applicationInUse(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { return applicationRuntime.inUse(req.vaultScope,application,body); }
+    @VaultEndpoint('Runtime', 'Register a bounded reported runtime instance without configuration-write access', 'read', 'ApplicationRegistration', 'EmptyObject', true)
+    @Post('local/application-runtime/:application/register') @HttpCode(200) @Permissions('read')
+    applicationRegister(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) fail(400,'BadParameter'); return applicationRuntime.register(req.vaultScope,application,runtimeCaller(req)); }
+    @VaultEndpoint('Runtime', 'Report instance adoption; reports are not security attestations', 'read', 'ApplicationAcknowledged', 'ApplicationAcknowledgement', true)
+    @Post('local/application-runtime/:application/acknowledge') @HttpCode(200) @Permissions('read')
+    applicationAcknowledge(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { return applicationRuntime.acknowledge(req.vaultScope,application,runtimeCaller(req),body); }
+    @VaultEndpoint('Applications', 'Inspect reported adoption without instance proofs or values', 'list', 'ApplicationRuntimeStatus', undefined, true)
+    @Get('local/applications/:application/status') @Permissions('list')
+    applicationRuntimeStatus(@Req() req: ScopedRequest, @Param('application') application: string) { return applicationRuntime.status(req.vaultScope,application); }
+    @VaultEndpoint('Applications', 'List application models and linked resource metadata in this namespace', 'list', 'Applications', undefined, true)
+    @Get('local/applications') @Permissions('list')
+    applicationsList(@Req() req: ScopedRequest) { return applications.list(req.vaultScope); }
+    @VaultEndpoint('Applications', 'Create or edit an application in shared scope', 'write and list', 'Applications', 'ApplicationSave', true)
+    @Put('local/applications/:application') @Permissions('write', 'list')
+    applicationSave(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { return applications.save(req.vaultScope, application, body); }
+    @VaultEndpoint('Applications', 'Link an existing resource using its canonical ENV name', 'write and list; tenant links also require shared catalog list', 'Applications', 'ApplicationLink', true)
+    @Put('local/applications/:application/resources/:kind/:name') @Permissions('write', 'list')
+    async applicationLink(@Req() req: ScopedRequest, @Param('application') application: string, @Param('kind') kind: string, @Param('name') name: string, @Body() body: unknown) {
+      // Linking to the environment catalog requires authority there too.
+      if (req.vaultScope.tenant !== '_shared') {
+        const catalogToken = req.headers['x-vault-catalog-token'];
+        if (catalogToken !== undefined && typeof catalogToken !== 'string') fail(400, 'BadParameter');
+        await grants.authorize(catalogToken === undefined ? req.headers.authorization : `Bearer ${catalogToken}`, { ...req.vaultScope, tenant: '_shared' }, ['list']);
+      }
+      return applications.link(req.vaultScope, application, kind, name, body);
+    }
+    @VaultEndpoint('Applications', 'Unlink a resource without deleting its versions', 'write and list', 'Applications', 'ApplicationRevision', true)
+    @Delete('local/applications/:application/resources/:kind/:name') @Permissions('write', 'list')
+    applicationUnlink(@Req() req: ScopedRequest, @Param('application') application: string, @Param('kind') kind: string, @Param('name') name: string, @Body() body: unknown) { return applications.unlink(req.vaultScope, application, kind, name, body); }
     @VaultEndpoint('Provisioning', 'Reconcile the required manifest atomically', 'write and read', 'Snapshot', 'Reconcile', true)
     @Post('local/reconcile') @HttpCode(200) @Permissions('write', 'read')
     reconcile(@Req() req: ScopedRequest, @Body() body: unknown) { return provisioning.reconcile(req.vaultScope, body); }

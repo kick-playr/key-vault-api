@@ -30,6 +30,6 @@ export function tags(value: unknown): Record<string, string> | undefined {
 export function envName(value: unknown): string {
   check(typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,127}$/.test(value));
   check(!/^(PUBLIC_|NEXT_PUBLIC_|VITE_|NUXT_PUBLIC_|REACT_APP_)/.test(value));
-  check(!/^(NODE_|NPM_|VAULT_)/.test(value) && !['PATH', 'HOME', 'SHELL', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'].includes(value));
+  check(!/^(NODE_|NPM_|VAULT_|LOCAL_KEYVAULT_)/.test(value) && !['SECRETS_KEYS_STRATEGY', 'PATH', 'HOME', 'SHELL', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'].includes(value));
   return value;
 }

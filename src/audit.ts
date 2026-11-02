@@ -40,6 +40,14 @@ export function auditOperation(method: string, path: string): Operation | undefi
     if (method === 'PUT' && /^\/local\/runtime-manifests\/[^/]+$/i.test(path)) return { category: 'write', action: 'local.runtime-manifests.publish' };
     return;
   }
+  if (/^\/local\/applications(?:\/[^/]+(?:\/resources\/(?:keys|secrets)\/[^/]+)?)?$/.test(path)) {
+    if (method === 'GET') return { category: 'list', action: 'local.applications.list' };
+    if (['PUT', 'DELETE'].includes(method)) return { category: 'write', action: 'local.applications.write' };
+    return;
+  }
+  const applicationRuntime = /^\/local\/application-runtime\/[^/]+\/(desired|snapshot|register|acknowledge|in-use)$/.exec(path);
+  if (applicationRuntime && (method === 'GET' && applicationRuntime[1] === 'desired' || method === 'POST' && applicationRuntime[1] !== 'desired')) return { category: 'read', action: `local.application-runtime.${applicationRuntime[1]}` };
+  if (method === 'GET' && /^\/local\/applications\/[^/]+\/status$/.test(path)) return { category: 'list', action: 'local.applications.status' };
   const oauth = /^\/local\/oauth-credentials\/(enroll|read|begin|commit)$/.exec(path);
   if (oauth && method === 'POST') return { category: oauth[1] === 'read' ? 'read' : 'write', action: `local.oauth-credentials.${oauth[1]}` };
   const local = /^\/local\/(session|key-tree|inventory|snapshot|runtime-snapshot|reconcile)$/i.exec(path);

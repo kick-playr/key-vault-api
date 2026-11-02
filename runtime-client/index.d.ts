@@ -43,3 +43,18 @@ export function bindingDigest(request: Omit<RuntimeSnapshotRequest, 'bindingDige
 export function parseSnapshotRequest(input: unknown): RuntimeSnapshotRequest;
 export function snapshotMappings(snapshot: RuntimeSnapshot): Readonly<Record<string, string>>;
 export function createSecretsRuntime(options: { environment: Record<string, string | undefined>; fetch?: typeof globalThis.fetch; credentialSupplier?: (scope: Readonly<Scope>) => string | Promise<string> }): SecretsRuntime;
+
+export interface ApplicationResourceDescriptor { kind: 'secrets'; name: string; mapping: string; policy: string; version: string; classification: 'secret' | 'encryption-key' | 'managed-credential'; attributes: Attributes }
+export interface ApplicationDescriptor { schemaVersion: 2; application: string; scope: Scope; generation: number; digest: string; resources: ApplicationResourceDescriptor[] }
+export interface ApplicationSnapshot extends Omit<ApplicationDescriptor, 'resources'> { resources: (ApplicationResourceDescriptor & { value: string })[] }
+export interface PreparedApplicationValue<T> { value: T; dispose?: () => void | Promise<void> }
+export interface ApplicationPrepareContext { previous?: ApplicationSnapshot; previousDescriptor?: ApplicationDescriptor; signal: AbortSignal }
+export interface ApplicationRuntimeStatus { state: 'starting' | 'applied' | 'warning' | 'blocked' | 'closed'; reason?: string; generation?: number; digest?: string }
+export interface ApplicationRuntime<T> {
+  start(): Promise<void>; refresh(): Promise<void>; close(): void;
+  withValue<R>(operation: (value: T, context: Readonly<{ signal: AbortSignal; generation: number; digest: string; scope: Readonly<Scope> }>) => R | Promise<R>): Promise<R>;
+  status(): Readonly<ApplicationRuntimeStatus>;
+}
+export function createApplicationRuntime<T>(options: { application: string; scope: Scope; environment: Record<string,string|undefined>; allowedMappings: readonly string[]; requiredMappings?: readonly string[]; fetch?: typeof globalThis.fetch; credentialSupplier?: (scope: Readonly<Scope>) => string | Promise<string>; intervalMs?: number; operationTimeoutMs?: number; prepare: (snapshot: ApplicationSnapshot, context: ApplicationPrepareContext) => PreparedApplicationValue<T> | Promise<PreparedApplicationValue<T>>; prepareMigration?: (snapshot: ApplicationSnapshot, context: ApplicationPrepareContext) => PreparedApplicationValue<T> | Promise<PreparedApplicationValue<T>> }): ApplicationRuntime<T>;
+export function parseApplicationDescriptor(input: unknown, scope: Scope, application: string): ApplicationDescriptor;
+export function parseApplicationDescriptor(input: unknown, scope: Scope, application: string, values: true): ApplicationSnapshot;

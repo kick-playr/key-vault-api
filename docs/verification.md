@@ -134,3 +134,7 @@ node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.inven
 ```
 
 `npm run typecheck` and `npm run build` passed. The MongoDB-backed full suite was not run because it launches disposable mongod processes; service starts were outside this task's authorization. No real vault, running services, credentials or stores were touched. Locked install reports the same 6 low-severity development-tooling advisories previously documented; no dependency updates made. Live HTTP/database integration and running UI remain unverified.
+
+## Secret version counts — release 0.1.5 (2026-11-02)
+
+Local inventory now includes versionCount from the already-loaded resource version array, including disabled/expired versions. No extra history requests, secret reads, permission changes or new storage. Azure-compatible /keys and /secrets list shapes are unchanged. Four inventory unit tests pass; all71 tests across10 pure/in-memory suites, typecheck and compilation pass. Full database-backed suite remains unrun under no-service-start constraint. Unrelated untracked APP-49 design file was left untouched.

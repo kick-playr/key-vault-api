@@ -53,6 +53,6 @@ export const schemas: Record<string, SchemaObject> = {
   VaultError: obj({ error: obj({ code: text, message: text }, ['code', 'message']) }, ['error']),
   KeyInventory: obj({ value: { type: 'array', items: ref('KeyMetadata') }, nextLink: { type: 'string', format: 'uri' } }, ['value']),
   SecretInventory: obj({ value: { type: 'array', items: ref('SecretMetadata') }, nextLink: { type: 'string', format: 'uri' } }, ['value']),
-  InventoryItem: obj({ name: text, kind: { type: 'string', enum: ['key', 'secret'] }, id: { type: 'string', format: 'uri' }, version: text, versionId: { type: 'string', format: 'uri' }, attributes: ref('Attributes'), tags, purpose: text, contentType: text }, ['name', 'kind', 'id', 'version', 'versionId', 'attributes']),
+  InventoryItem: obj({ versionCount: { type: 'integer', minimum: 1, description: 'Total retained versions, including disabled and expired versions.' }, name: text, kind: { type: 'string', enum: ['key', 'secret'] }, id: { type: 'string', format: 'uri' }, version: text, versionId: { type: 'string', format: 'uri' }, attributes: ref('Attributes'), tags, purpose: text, contentType: text }, ['name', 'kind', 'id', 'version', 'versionId', 'attributes']),
   Inventory: obj({ value: { type: 'array', items: ref('InventoryItem') }, nextLink: { type: 'string', format: 'uri' } }, ['value']),
 };

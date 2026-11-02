@@ -66,7 +66,7 @@ export class InventoryService {
         const baseId = `${this.vault.baseUrl}/namespaces/${scope.environment}/${scope.tenant}/${kind}/${name}`;
         const common = { attributes: item.attributes, ...(item.tags && { tags: item.tags }), ...(kind === 'secrets' && item.contentType !== undefined && { contentType: item.contentType }) };
         const metadata = local
-          ? { ...common, kind: kind === 'keys' ? 'key' : 'secret', name, id: baseId, version: item.version, versionId: this.vault.id(scope, kind, name, item.version), ...(purpose !== undefined && { purpose }) }
+          ? { ...common, versionCount: versions.length, kind: kind === 'keys' ? 'key' : 'secret', name, id: baseId, version: item.version, versionId: this.vault.id(scope, kind, name, item.version), ...(purpose !== undefined && { purpose }) }
           : { ...common, [kind === 'keys' ? 'kid' : 'id']: baseId };
         rows.push({ order, metadata });
       }

@@ -32,3 +32,6 @@ describe('literal inventory name-or-purpose search',()=>{
   expect(()=>inventory.list(scope,'secrets',{search:'database'})).toThrow();
  });
 });
+it('includes total version count in local metadata without fetching values',async()=>{
+ const {inventory,ns}=fixture();ns.secrets['physical-a']!.push({...ns.secrets['physical-a']![0]!,version:'v2'});const result:any=await inventory.list(scope,'local/inventory',{search:'physical-a'});expect(result.value[0].versionCount).toBe(2);const compatible:any=await inventory.list(scope,'secrets',{});expect(compatible.value[0].versionCount).toBeUndefined();
+});

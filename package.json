@@ -1,6 +1,6 @@
 {
   "name": "@kick-playr/local-key-vault",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "NestJS local development vault with an explicit Azure Key Vault REST subset",
   "engines": {

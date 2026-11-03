@@ -151,3 +151,17 @@ new process. Durable migration completion must advance the trusted baseline as
 part of APP-43. An expired retained startup snapshot may preserve this comparison
 baseline, but its values remain unavailable. Activation handover retries after a
 failed first start so recovery does not depend on another browser request.
+
+Application links are edited in a checkbox table. The primary label is the
+resource purpose; the opaque vault ID remains a separate column. Existing links
+are checked, and selected rows expose Latest/exact-version and canonical ENV
+controls. Unchecking stages an unlink without deleting the resource. Changes
+apply only when Save links succeeds. Version history reads metadata only.
+
+`PUT /local/applications/:application/resources` accepts `expectedRevision` and
+an `updates` array of `{kind,name,selected,envName?,version?}` rows. Selected rows
+require ENV name and Latest/an immutable version; unselected rows omit those
+fields. One namespace transaction validates all changes and advances the model
+revision once. Unmentioned resources keep their memberships, including links
+outside the current inventory page. The existing write/list and tenant catalog
+list checks apply, and canonical ENV names remain shared across applications.

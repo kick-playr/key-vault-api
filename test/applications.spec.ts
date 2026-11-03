@@ -107,16 +107,46 @@ it('accepts distinct operator catalog and tenant grants without granting cross-n
   const store = {readGrants:async()=>grants,read:async(s:Scope,fn:any)=>structuredClone(fn(s.tenant==='_shared'?shared:tenant)),transaction:async(s:Scope,fn:any)=>fn(s.tenant==='_shared'?shared:tenant),appendAudit:async()=>{},close:async()=>{}};
   const spy=jest.spyOn(MongoStore,'open').mockResolvedValue(store as any);
   const app=await createApp({mongoUri:'mongodb://127.0.0.1:1/fixture',masterKey:randomBytes(32),baseUrl:'http://127.0.0.1:4000',audit:{list:'off',write:'off',read:'off',crypto:'off'}}); spy.mockRestore(); await app.init();
-  const call=()=>request(app.getHttpServer()).put('/local/applications/club-api/resources/secrets/local').set('Authorization',`Bearer ${tenantToken}`).set('x-vault-environment','development').set('x-vault-tenant','club');
+  const call=(bulk=false)=>request(app.getHttpServer()).put('/local/applications/club-api/resources'+(bulk?'':'/secrets/local')).set('Authorization',`Bearer ${tenantToken}`).set('x-vault-environment','development').set('x-vault-tenant','club');
   try {
     const body={expectedRevision:0,envName:'LOCAL_KEY',version:'latest'};
     await call().send(body).expect(403);
     await call().set('x-vault-catalog-token',catalogToken).send(body).expect(200);
     await call().set('x-vault-tenant','another').set('x-vault-catalog-token',catalogToken).send(body).expect(403);
+    const batch={expectedRevision:1,updates:[{kind:'secrets',name:'local',selected:false}]};
+    await call(true).send(batch).expect(403);
+    await call(true).set('x-vault-catalog-token',catalogToken).send(batch).expect(200);
+    expect(tenant.resourceAssociations!['secrets/local']!.memberships).toEqual({});
   } finally {await app.close();}
 });
 it.each(['LOCAL_KEYVAULT_AUTH_JSON','SECRETS_KEYS_STRATEGY','NODE_OPTIONS','NEXT_PUBLIC_KEY'])('never models runtime bootstrap variable %s as a secret mapping', async mapping=>{
   const f=fixture(); f.state(scope).secrets['bootstrap']=[newSecret({value:'private'})];
   await f.service.save(scope,'club-api',{expectedRevision:0,displayName:'Club',description:''});
   await expect(f.service.link(scope,'club-api','secrets','bootstrap',{expectedRevision:1,envName:mapping,version:'latest'})).rejects.toThrow();
+});
+it('saves selected secret/key link changes in one revision and rolls back invalid selections', async () => {
+  const f=fixture(); const one=newSecret({value:'PRIVATE'}),two=newSecret({value:'PRIVATE2'});
+  f.state(scope).secrets.first=[one]; f.state(scope).secrets.second=[two];
+  await f.service.save(scope,'club-api',{expectedRevision:0,displayName:'Club',description:''});
+  const changes=[{kind:'secrets',name:'first',selected:true,envName:'FIRST_KEY',version:'latest'},{kind:'secrets',name:'second',selected:true,envName:'SECOND_KEY',version:two.version}];
+  const result=await f.service.updateLinks(scope,'club-api',{expectedRevision:1,updates:changes});
+  expect(result.revision).toBe(2);expect(result.applications[0]!.resources).toHaveLength(2);expect(JSON.stringify(result)).not.toContain('PRIVATE');
+  await expect(f.service.updateLinks(scope,'club-api',{expectedRevision:2,updates:[{kind:'secrets',name:'first',selected:false},{...changes[1],version:'f'.repeat(32)}]})).rejects.toThrow();
+  expect((await f.service.list(scope)).applications[0]!.resources).toHaveLength(2);expect((await f.service.list(scope)).revision).toBe(2);
+  await f.service.updateLinks(scope,'club-api',{expectedRevision:2,updates:[{kind:'secrets',name:'first',selected:false}]});
+  expect((await f.service.list(scope)).applications[0]!.resources.map(r=>r.name)).toEqual(['second']);expect(f.state(scope).secrets.first).toHaveLength(1);
+});
+
+it('batch links non-exportable keys, keeps unloaded links and rejects stale or duplicate row writes',async()=>{
+ const f=fixture(),key={version:'a'.repeat(32),attributes:{enabled:true,created:1,updated:1,recoveryLevel:'Purgeable' as const},privateKey:{kty:'RSA',d:'PRIVATE_CANARY'}};
+ f.state(scope).keys.wrapping=[key];f.state(scope).secrets.unseen=[newSecret({value:'PRIVATE_CANARY'})];
+ await f.service.save(scope,'club-api',{expectedRevision:0,displayName:'Club',description:''});
+ await f.service.link(scope,'club-api','secrets','unseen',{expectedRevision:1,envName:'UNSEEN_KEY',version:'latest'});
+ const update={kind:'keys',name:'wrapping',selected:true,envName:'WRAPPING_KEY',version:key.version};
+ const result=await f.service.updateLinks(scope,'club-api',{expectedRevision:2,updates:[update]});
+ expect(result.applications[0]!.resources).toHaveLength(2);expect(JSON.stringify(result)).not.toContain('PRIVATE_CANARY');
+ await expect(f.service.updateLinks(scope,'club-api',{expectedRevision:2,updates:[update]})).rejects.toThrow('ApplicationRevisionConflict');
+ await expect(f.service.updateLinks(scope,'club-api',{expectedRevision:3,updates:[update,update]})).rejects.toThrow();
+ await expect(f.service.updateLinks(scope,'club-api',{expectedRevision:3,updates:[{...update,envName:'OTHER'}]})).rejects.toThrow('CanonicalMappingConflict');
+ expect((await f.service.list(scope)).revision).toBe(3);
 });

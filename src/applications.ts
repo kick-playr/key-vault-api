@@ -71,28 +71,61 @@ export class ApplicationsService {
       return this.project(scope, ns, applications);
     });
   }
+  private applyLink(ns: Namespace, application: string, kind: Kind, name: string, body: Record<string,unknown>) {
+    const mapping = envName(body.envName);
+    check(body.version === 'latest' || typeof body.version === 'string' && /^[a-f0-9]{32}$/.test(body.version));
+    const policy = body.version as string;
+    const selected = find(ns, kind, name, policy === 'latest' ? undefined : policy); active(selected);
+    const associations = ns.resourceAssociations ??= {};
+    const id = `${kind}/${name}`, previous = has(associations, id);
+    if (previous && previous.envName !== mapping) fail(409, 'CanonicalMappingConflict');
+    // Existing declared mappings are authoritative even before first linking.
+    const declared = new Set(ns[kind][name]!.map(v => v.tags?.envName).filter((v): v is string => v !== undefined));
+    if (declared.size > 1 || declared.size === 1 && !declared.has(mapping)) fail(409, 'CanonicalMappingConflict');
+    for (const [otherId, entry] of Object.entries(associations)) {
+      if (otherId !== id && entry.envName === mapping && has(entry.memberships, application)) fail(409, 'MappingConflict');
+    }
+    if (!previous && Object.keys(associations).length >= 500) fail(409, 'ApplicationResourceLimit');
+    const association: ResourceAssociation = previous ?? { envName: mapping, memberships: {} };
+    association.memberships[application] = policy; associations[id] = association;
+  }
+  async updateLinks(scope: Scope, application: string, input: unknown): Promise<ApplicationsView> {
+    applicationName(application);
+    const catalog = await this.catalog(scope);
+    if (!has(catalog, application)) fail(404, 'ApplicationNotFound');
+    return this.store.transaction(scope, ns => {
+      const body = revision(ns, input, ['updates']);
+      check(Array.isArray(body.updates) && body.updates.length > 0 && body.updates.length <= 500);
+      const seen = new Set<string>();
+      const updates = body.updates.map(raw => {
+        const row = object(raw, ['kind','name','selected','envName','version']);
+        const kind = kindName(row.kind as string), name = identifier(row.name);
+        check(typeof row.selected === 'boolean');
+        const id = `${kind}/${name}`; check(!seen.has(id)); seen.add(id);
+        if (!row.selected) check(row.envName === undefined && row.version === undefined);
+        return {kind,name,id,row};
+      });
+      const staged = {...ns, resourceAssociations: structuredClone(ns.resourceAssociations ?? {})};
+      // Apply removals first so a newly selected resource may reuse a removed mapping.
+      for (const {id,row} of updates) if (!row.selected) {
+        const association = has(staged.resourceAssociations,id);
+        if (!association || !has(association.memberships,application)) fail(404,'ApplicationLinkNotFound');
+        delete association.memberships[application];
+      }
+      for (const {kind,name,row} of updates) if (row.selected) this.applyLink(staged,application,kind,name,row);
+      ns.resourceAssociations = staged.resourceAssociations;
+      ns.applicationRevision = (ns.applicationRevision ?? 0) + 1;
+      changed(ns, 'application.links.save', application);
+      return this.project(scope,ns,scope.tenant === '_shared' ? ns.applications ?? {} : catalog);
+    });
+  }
   async link(scope: Scope, application: string, rawKind: string, name: string, input: unknown): Promise<ApplicationsView> {
     applicationName(application); const kind = kindName(rawKind); identifier(name);
     const catalog = await this.catalog(scope);
     if (!has(catalog, application)) fail(404, 'ApplicationNotFound');
     return this.store.transaction(scope, ns => {
       const body = revision(ns, input, ['envName', 'version']);
-      const mapping = envName(body.envName);
-      check(body.version === 'latest' || typeof body.version === 'string' && /^[a-f0-9]{32}$/.test(body.version));
-      const policy = body.version as string;
-      const selected = find(ns, kind, name, policy === 'latest' ? undefined : policy); active(selected);
-      const associations = ns.resourceAssociations ??= {};
-      const id = `${kind}/${name}`, previous = has(associations, id);
-      if (previous && previous.envName !== mapping) fail(409, 'CanonicalMappingConflict');
-      // Existing declared mappings are authoritative even before first linking.
-      const declared = new Set(ns[kind][name]!.map(v => v.tags?.envName).filter((v): v is string => v !== undefined));
-      if (declared.size > 1 || declared.size === 1 && !declared.has(mapping)) fail(409, 'CanonicalMappingConflict');
-      for (const [otherId, entry] of Object.entries(associations)) {
-        if (otherId !== id && entry.envName === mapping && has(entry.memberships, application)) fail(409, 'MappingConflict');
-      }
-      if (!previous && Object.keys(associations).length >= 500) fail(409, 'ApplicationResourceLimit');
-      const association: ResourceAssociation = previous ?? { envName: mapping, memberships: {} };
-      association.memberships[application] = policy; associations[id] = association;
+      this.applyLink(ns,application,kind,name,body);
       ns.applicationRevision = (ns.applicationRevision ?? 0) + 1;
       changed(ns, 'application.link', application);
       return this.project(scope, ns, scope.tenant === '_shared' ? ns.applications ?? {} : catalog);

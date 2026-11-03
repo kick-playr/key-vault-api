@@ -119,6 +119,16 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Applications', 'Create or edit an application in shared scope', 'write and list', 'Applications', 'ApplicationSave', true)
     @Put('local/applications/:application') @Permissions('write', 'list')
     applicationSave(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { return applications.save(req.vaultScope, application, body); }
+    @VaultEndpoint('Applications', 'Save checked resource link changes atomically', 'write and list; tenant links also require shared catalog list', 'Applications', 'ApplicationLinks', true)
+    @Put('local/applications/:application/resources') @Permissions('write', 'list')
+    async applicationLinks(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) {
+      if (req.vaultScope.tenant !== '_shared') {
+        const token = req.headers['x-vault-catalog-token'];
+        if (token !== undefined && typeof token !== 'string') fail(400,'BadParameter');
+        await grants.authorize(token === undefined ? req.headers.authorization : `Bearer ${token}`, {...req.vaultScope,tenant:'_shared'}, ['list']);
+      }
+      return applications.updateLinks(req.vaultScope,application,body);
+    }
     @VaultEndpoint('Applications', 'Link an existing resource using its canonical ENV name', 'write and list; tenant links also require shared catalog list', 'Applications', 'ApplicationLink', true)
     @Put('local/applications/:application/resources/:kind/:name') @Permissions('write', 'list')
     async applicationLink(@Req() req: ScopedRequest, @Param('application') application: string, @Param('kind') kind: string, @Param('name') name: string, @Body() body: unknown) {

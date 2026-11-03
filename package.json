@@ -1,6 +1,6 @@
 {
   "name": "@kick-playr/local-key-vault",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "NestJS local development vault with an explicit Azure Key Vault REST subset",
   "engines": {
@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "migrate:secret-formats": "npm run build && node dist/backfill-secret-value-formats.js",
     "start": "node dist/main.js",
     "start:dev": "npm run build && node dist/main.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",

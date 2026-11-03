@@ -23,7 +23,7 @@ function text(value: unknown, max: number): string {
 function kindName(value: string): Kind { check(value === 'keys' || value === 'secrets'); return value as Kind; }
 const has = <T>(map: Record<string, T> | undefined, key: string): T | undefined => map && Object.hasOwn(map, key) ? map[key] : undefined;
 export interface ApplicationResource {
-  kind: Kind; name: string; envName: string; policy: string; version?: string;
+  valueFormat?: import('./secret-value-format.js').SecretValueFormat; kind: Kind; name: string; envName: string; policy: string; version?: string;
   enabled: boolean; missing: boolean; tags: Record<string, string>; applications: string[];
 }
 export interface ApplicationView { name: string; displayName: string; description: string; supported: boolean; resources: ApplicationResource[]; liveEnabled: boolean; runtimeStatus: 'not-connected' }
@@ -43,7 +43,7 @@ export class ApplicationsService {
         const [kind, resourceName] = id.split('/') as [Kind, string];
         const versions = has(ns?.[kind], resourceName);
         const item = policy === 'latest' ? versions?.at(-1) : versions?.find(v => v.version === policy);
-        return [{ kind, name: resourceName, envName: association.envName, policy,
+        return [{ ...(kind === 'secrets' && item?.valueFormat !== undefined && {valueFormat:item.valueFormat}), kind, name: resourceName, envName: association.envName, policy,
           ...(item ? { version: item.version } : {}), enabled: item?.attributes.enabled ?? false,
           missing: !item, tags: { ...item?.tags }, applications: Object.keys(association.memberships).sort() }];
       });

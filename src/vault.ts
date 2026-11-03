@@ -1,3 +1,4 @@
+import { validateSecretValueFormat } from './secret-value-format.js';
 import { createPrivateKey, createPublicKey, generateKeyPair, privateDecrypt, publicEncrypt, randomUUID, constants } from 'node:crypto';
 import { promisify } from 'node:util';
 import { MongoStore } from './store.js';
@@ -28,10 +29,10 @@ function makeAttributes(input: unknown): Attributes {
   return { enabled: true, ...attributes(input), created: now, updated: now, recoveryLevel: 'Purgeable' };
 }
 export function secretInput(input: unknown) {
-  const body = object(input, ['value', 'attributes', 'tags', 'contentType']);
+  const body = object(input, ['value', 'attributes', 'tags', 'contentType', 'valueFormat']);
   check(typeof body.value === 'string' && Buffer.byteLength(body.value) <= 25600);
   check(body.contentType === undefined || typeof body.contentType === 'string' && body.contentType.length <= 255);
-  return { value: body.value, attributes: makeAttributes(body.attributes), tags: tags(body.tags), contentType: body.contentType as string | undefined };
+  return { value: body.value, valueFormat: validateSecretValueFormat(body.value, body.valueFormat), attributes: makeAttributes(body.attributes), tags: tags(body.tags), contentType: body.contentType as string | undefined };
 }
 export function keyInput(input: unknown) {
   const body = object(input, ['kty', 'key_size', 'key_ops', 'attributes', 'tags']);
@@ -59,7 +60,7 @@ export class VaultService {
   }
   bundle(scope: Scope, kind: Kind, name: string, item: Version, metadata = false): Record<string, unknown> {
     const common = { attributes: item.attributes, ...(item.tags && { tags: item.tags }) };
-    if (kind === 'secrets') return { ...common, id: this.id(scope, kind, name, item.version),
+    if (kind === 'secrets') return { ...common, ...(item.valueFormat !== undefined && { valueFormat: item.valueFormat }), id: this.id(scope, kind, name, item.version),
       ...(item.contentType !== undefined && { contentType: item.contentType }), ...(!metadata && { value: item.value }) };
     return metadata ? { ...common, kid: this.id(scope, kind, name, item.version) } :
       { ...common, key: { ...item.publicKey, kid: this.id(scope, kind, name, item.version), key_ops: item.keyOps } };
@@ -89,11 +90,12 @@ export class VaultService {
     });
   }
   async update(scope: Scope, kind: Kind, name: string, version: string, input: unknown) {
-    const body = object(input, kind === 'keys' ? ['attributes', 'tags', 'key_ops'] : ['attributes', 'tags', 'contentType']);
+    const body = object(input, kind === 'keys' ? ['attributes', 'tags', 'key_ops'] : ['attributes', 'tags', 'contentType', 'valueFormat']);
     const attr = attributes(body.attributes), tag = tags(body.tags);
     if (body.contentType !== undefined) check(typeof body.contentType === 'string' && body.contentType.length <= 255);
     return this.store.transaction(scope, ns => {
       const item = find(ns, kind, name, version);
+      if (kind === 'secrets' && body.valueFormat !== undefined) item.valueFormat = validateSecretValueFormat(item.value!, body.valueFormat);
       if (body.key_ops !== undefined) {
         const parsed = keyInput({ kty: 'RSA', key_ops: body.key_ops }); item.keyOps = parsed.ops;
       }

@@ -56,7 +56,7 @@ export async function importTenantKeySet(store: MongoStore, scope: Scope, token:
         try { active(latest); } catch { fail(409, 'ImportConflict', 'An existing target secret is inactive; no import was committed.'); }
         skipped++;
       } else {
-        ns.secrets[key.name] = [newSecret({ value: key.value, tags: key.tags })];
+        ns.secrets[key.name] = [newSecret({ value: key.value, valueFormat: 'base64', tags: key.tags })];
         changed(ns, options.createOnly ? 'create:tenant-key' : 'import:secrets', key.name); imported++;
       }
     }

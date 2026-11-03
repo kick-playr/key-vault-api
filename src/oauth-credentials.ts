@@ -267,6 +267,7 @@ export class OAuthCredentialService {
         value: canonical(p),
         tags: old.tags,
         contentType: old.contentType,
+        valueFormat: old.valueFormat,
         attributes: {
           enabled: old.attributes.enabled,
           ...(old.attributes.exp !== undefined

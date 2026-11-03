@@ -512,3 +512,11 @@ Deleted-name markers reject late enrollment; explicit recreation permits reuse.
 Legacy namespaces whose scope cannot be verified and ambiguous pending writes
 block deletion rather than guessing. Pending reservations are not automatically
 expired; uncertain operations require reconciliation.
+
+### Secret value formats
+
+The local secret API accepts `valueFormat: "text" | "base64" | "hex64"` on secret creation and metadata updates. This is a local metadata extension, returned by secret reads, inventory, version history and application resource details. It describes the stored text; no value is decoded, converted or normalized. Base64 must be canonical standard Base64 (with required padding); Hex64 means exactly 64 hexadecimal characters, preserving case. Cryptographic consumers still validate the decoded length required by their particular mapping.
+
+The UI requires a format choice for new versions. Existing API callers that omit it create Plain text versions. Metadata updates validate the stored value without returning it to metadata-only writers.
+
+To classify previously stored versions, run `npm run migrate:secret-formats -- --dry-run`, then `npm run migrate:secret-formats -- --apply`. The migration covers retained historical versions, including disabled ones, and preserves existing declarations. It guesses Hex64 first, then nonempty canonical Base64, otherwise Plain text. Some ordinary text can resemble Base64; administrators can correct the declaration in the UI. Values, immutable version IDs and links remain unchanged; output contains counts only. Existing bootstrap credentials are loaded internally and never printed.

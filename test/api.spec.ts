@@ -10,6 +10,26 @@ describe('Azure subset HTTP contract', () => {
     await request(f.app.getHttpServer()).get('/secrets/example' + api).set('Authorization', `Bearer ${token}`)
       .set('x-vault-environment', 'dev').set('x-vault-tenant', 'b').expect(403);
   });
+  it('validates and edits format metadata without exposing or changing secret text', async () => {
+    const value = 'aB01'.repeat(16);
+    const created = await call(f.app, 'put', '/secrets/formatted' + api).send({ value, valueFormat: 'hex64' }).expect(200);
+    expect(created.body.valueFormat).toBe('hex64'); expect(created.body.value).toBe(value);
+    const version = created.body.id.split('/').pop();
+    const edited = await call(f.app, 'patch', '/secrets/formatted/' + version + api).send({ valueFormat: 'base64' }).expect(200);
+    expect(edited.body.valueFormat).toBe('base64'); expect(edited.body.value).toBeUndefined();
+    const writeToken='format-metadata-only-writer-aaaaaaaaaaaaaaaaaaaaaaaa';
+    await f.addGrants([{token:writeToken,environment:'dev',tenant:'a',permissions:['write']}]);
+    const metadata=await request(f.app.getHttpServer()).patch('/secrets/formatted/'+version+api).set('Authorization','Bearer '+writeToken).set('x-vault-environment','dev').set('x-vault-tenant','a').send({valueFormat:'base64'}).expect(200);
+    expect(metadata.body.value).toBeUndefined();expect(JSON.stringify(metadata.body)).not.toContain(value);
+    await request(f.app.getHttpServer()).get('/secrets/formatted/'+version+api).set('Authorization','Bearer '+writeToken).set('x-vault-environment','dev').set('x-vault-tenant','a').expect(403);
+
+    expect((await call(f.app, 'get', '/secrets/formatted/' + version + api).expect(200)).body.value).toBe(value);
+    await call(f.app, 'patch', '/secrets/formatted/' + version + api).send({ valueFormat: 'invalid' }).expect(400);
+    const versions=await call(f.app,'get','/secrets/formatted/versions'+api).expect(200);
+    expect(versions.body.value[0].valueFormat).toBe('base64'); expect(JSON.stringify(versions.body)).not.toContain(value);
+    const plain=await call(f.app,'put','/secrets/ordinary'+api).send({value:'ordinary password'}).expect(200); expect(plain.body.valueFormat).toBe('text');
+    await call(f.app,'put','/secrets/bad-format'+api).send({value:'abc',valueFormat:'hex64'}).expect(400);
+  });
   it('sets new secret versions, retains old values and isolates tenants', async () => {
     const one = await call(f.app, 'put', '/secrets/password' + api).send({ value: 'first', contentType: 'password', tags: { owner: 'dev' } }).expect(200);
     expect(one.body).toMatchObject({ value: 'first', attributes: { enabled: true, recoveryLevel: 'Purgeable' } });

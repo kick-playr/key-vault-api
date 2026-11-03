@@ -1,3 +1,4 @@
+import { classifySecretVersions } from './secret-value-format.js';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Collection, Db, MongoClient, MongoServerError } from 'mongodb';
 import { describeSystemError, fail, VaultError } from './errors.js';
@@ -144,6 +145,30 @@ export class MongoStore {
       if(ns.runtimeManifests?.[application])result.manifests++;
       result.instances+=Object.values(ns.runtimeInstances??{}).filter(r=>r.application===application&&r.expiresAt>Date.now()).length;
     }return result;}catch{fail(503,'ApplicationUsageUnavailable');}finally{await cursor.close().catch(()=>{});}
+  }
+  /** Offline metadata migration; uses the same encrypted CAS writes as normal operations. */
+  async backfillSecretValueFormats(dryRun = true) {
+    const result = { namespaces: 0, versions: 0, dryRun };
+    const cursor = this.collection.find({}, { maxTimeMS: 10000 }).batchSize(1);
+    try {
+      for await (const envelope of cursor) {
+        const ns = this.decode(envelope) as Namespace;
+        if (!ns || !ns.secrets || !Array.isArray(ns.audit) || !Number.isSafeInteger(ns.generation)) fail(503, 'StoreUnavailable');
+        const candidates = classifySecretVersions(ns, true);
+        if (!candidates) continue;
+        const count = dryRun ? candidates : await this.transactionDocument(this.collection, envelope._id, emptyNamespace, current => {
+          const updated = classifySecretVersions(current);
+          if (updated) {
+            current.generation++;
+            current.audit.push({time: Math.floor(Date.now()/1000), action: 'secret.formats.backfill', name: 'metadata'});
+            if (current.audit.length > 1000) current.audit.shift();
+          }
+          return updated;
+        });
+        if (count) { result.namespaces++; result.versions += count; }
+      }
+      return result;
+    } finally { await cursor.close().catch(() => undefined); }
   }
   async readGrants(): Promise<StoredGrant[]> {
     const envelope = await this.fetch('grants:registry', this.database.collection<Envelope>('vault_grants'));

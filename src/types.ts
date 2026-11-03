@@ -1,3 +1,4 @@
+import type { SecretValueFormat } from './secret-value-format.js';
 import type { RuntimeManifest } from '@kick-playr/local-key-vault/runtime-client';
 import type { RuntimeInstanceRecord } from './application-runtime.js';
 import type { JsonWebKey } from 'node:crypto';
@@ -5,7 +6,7 @@ export interface Attributes { enabled: boolean; created: number; updated: number
 export interface Version {
   oauthRenewal?: {mapping: string; operationId: string; previousVersion: string};
   version: string; attributes: Attributes; tags?: Record<string, string>; contentType?: string;
-  value?: string; privateKey?: JsonWebKey; publicKey?: JsonWebKey; keySize?: number; keyOps?: string[];
+  valueFormat?: SecretValueFormat; value?: string; privateKey?: JsonWebKey; publicKey?: JsonWebKey; keySize?: number; keyOps?: string[];
 }
 export interface OAuthCredential {
  application: 'club-api'; provider: 'bexio' | 'dropbox'; purpose: string; anchorVersion: string; currentVersion: string; versions: string[];

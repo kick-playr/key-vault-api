@@ -44,7 +44,7 @@ export class ProvisioningService {
           if (kind === 'keys' && (existing.keySize !== entry.keySize || digest([...(existing.keyOps ?? [])].sort()) !== digest(entry.keyOps))) fail(409, 'KeyPolicyMismatch');
           if (kind === 'secrets' && Object.hasOwn(secrets, entry.purpose)) {
             const a = Buffer.from(digest(existing.value)), b = Buffer.from(digest(secrets[entry.purpose]));
-            if (!timingSafeEqual(a, b)) { ns.secrets[name]!.push(newSecret({ value: secrets[entry.purpose], tags: existing.tags })); changed(ns, 'reconcile:secret', name); }
+            if (!timingSafeEqual(a, b)) { ns.secrets[name]!.push(newSecret({ value: secrets[entry.purpose], valueFormat: existing.valueFormat, tags: existing.tags })); changed(ns, 'reconcile:secret', name); }
           }
         } else {
           if (ns.tombstones.includes(`${kind}/${name}`)) fail(409, 'RevokedResource');

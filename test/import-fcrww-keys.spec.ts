@@ -59,6 +59,7 @@ describe('FCRWW key import', () => {
     expect(result.imported).toBe(3); expect(result.skipped).toBe(0);
     for (const v of Object.values(input)) expect(JSON.stringify(result)).not.toContain(v);
     expect((await vault.get(scope, 'secrets', layout.entries[0]!.name)).value).toBe(input.WORKFLOW_REAL_FCRWW_WRAPPING_KEY_V1);
+    expect((await vault.get(scope, 'secrets', layout.entries[0]!.name)).valueFormat).toBe('base64');
     expect((await vault.get(scope, 'secrets', layout.entries[1]!.name)).value).toBe(input.WORKFLOW_REAL_FCRWW_INDEX_KEY);
     expect((await vault.get(scope, 'secrets', layout.entries[2]!.name)).value).toBe(input.WORKFLOW_REAL_FCRWW_CONTROL_KEY);
     const before = await store.read(scope, ns => ns);

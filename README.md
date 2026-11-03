@@ -436,3 +436,57 @@ cloud workload identity configuration.
 `GET /local/inventory?kind=secret&search=database` matches a case-insensitive literal substring in the physical resource name **or** the latest version's `purpose` tag. Search is 1–512 characters without control characters; whitespace and punctuation are literal, with no regex evaluation. Omit search to list normally. Existing filters still combine using AND. Search runs before pagination; continuation tokens bind the original query and namespace. Values and key material are never searched or returned. This optional local query does not alter the Azure-compatible `/keys` or `/secrets` list contract.
 
 Install this API change before the app's purpose-search update. No store migration, new grants, deployment or running-service restart is performed by these commits. Pure search regression tests run with `npm run test:inventory` without a MongoDB process.
+
+## APP-49 consumer refresh and tenant rotation — 0.1.8
+
+Application links describe desired configuration. Explicitly activating a supported
+application enables the live consumer; saving a link alone does not prove adoption.
+The club API, club APP, Explorer API and Explorer frontend consume immutable SDK
+revisions. Healthy ordinary updates prepare replacement clients before swapping
+request generations. Transient outages retain a still-valid previous generation
+with a warning; observed denial and known expiry fence affected work. Instance
+reports contain metadata and are not runtime attestation.
+
+`createSecretsRuntime().loadTenantBinding(application, tenant)` reads only the
+selected tenant's original enrollment metadata. Its revision is the immutable
+manifest anchor, separate from the tenant's current control revision. Failed
+child-manifest reads can be retried without discarding healthy metadata or reading
+obsolete ordinary secret values. Live startup must isolate those reads by tenant;
+`loadBindings` remains the aggregate legacy-startup interface.
+
+Managed OAuth updates use the opt-in `prepareManagedCredential` callback only
+when the encryption tuple is unchanged. The club adapter verifies the candidate
+against the credential broker and its original enrollment anchor. A broker outage
+keeps valid previous material; a known authorization denial fences admission.
+
+The `runtime-client/tenant-rotation` subpath provides a durable coordinator and
+MongoDB store. The club API owns the actual migration worker for its finite
+operational/control collection inventory. It pauses the selected tenant before
+writes, fences every batch by lease epoch and MongoDB transaction, persists
+checkpoints, verifies data and revision activation, and restores the previous
+lifecycle state only after completion. Unsupported schemas fail closed. Existing
+approval, counter and lock lifetimes can extend the pause. Restart resumes the
+same operation without generating another key set.
+
+The consumer adapter supplies `RotationPlan.dataset`, established from the prior
+admitted database URI or the original scoped enrollment value. Its database name
+and physical cluster digest are persisted atomically with the pause; a changed URI
+cannot direct migration or completed-proof adoption to a different empty database.
+All native writes use one MongoClient and transactional topology; standalone or
+cross-cluster migrations have no unsafe fallback. Old wrapping aliases, role pins
+and decrypt material are retained. No automatic retirement/deletion policy is
+introduced. The canonical ENV names remain stable, including the original `V1`
+suffix; migrated envelope labels use the immutable wrapping vault version.
+
+Explorer's authenticated `GET /api/platform/tenants/:environment/:id/key-rotation`
+returns scoped progress metadata for the Keys tab. It does not trigger migration
+and never returns key bytes. Cold club bootstrap still requires the original
+material needed to verify its complete installation marker; unavailable material
+fails closed. Shared process encryption changes, including Clerk's import-time
+key, remain guarded until a compatible migration/process replacement adapter is
+implemented. Pure ENV startup retains its existing behavior.
+
+Verification uses synthetic providers and storage. No live grants, keys, tenant
+data, running services or deployments are changed by these implementation checks;
+real MongoDB transaction topology and live provider behavior require separate
+rollout verification.

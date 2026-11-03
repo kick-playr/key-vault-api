@@ -472,7 +472,12 @@ The consumer adapter supplies `RotationPlan.dataset`, established from the prior
 admitted database URI or the original scoped enrollment value. Its database name
 and physical cluster digest are persisted atomically with the pause; a changed URI
 cannot direct migration or completed-proof adoption to a different empty database.
-All native writes use one MongoClient and transactional topology; standalone or
+Admitted ordinary writes and migration batches touch the same tenant definition
+in their data transaction, so a pre-pause write commits before the gate or aborts.
+LOCAL_KEYVAULT write credentials therefore need the trusted control-definition
+write permission as well as tenant-data permission. Driver timeouts alone are not
+used as evidence that a queued server write has ended. All native writes use one
+MongoClient and transactional topology; standalone or
 cross-cluster migrations have no unsafe fallback. Old wrapping aliases, role pins
 and decrypt material are retained. No automatic retirement/deletion policy is
 introduced. The canonical ENV names remain stable, including the original `V1`

@@ -141,3 +141,13 @@ key changes still require migration during this handover. The conversion helper
 derives the existing deterministic resource names; tenant key sets need their own
 explicit adapter. Dynamic realm mappings use a code-owned finite predicate, never
 an operator-provided executable expression or arbitrary ENV injection.
+
+A consumer that has already been activated must retain the encryption baseline
+across cold starts. `applicationDescriptorFromLegacy` converts authenticated v1
+immutable pins into metadata for the controller's `baseline` option, without
+fetching obsolete values. This descriptor cannot serve data. Missing baseline
+metadata fails closed; a changed encryption-key pin requires migration even on a
+new process. Durable migration completion must advance the trusted baseline as
+part of APP-43. An expired retained startup snapshot may preserve this comparison
+baseline, but its values remain unavailable. Activation handover retries after a
+failed first start so recovery does not depend on another browser request.

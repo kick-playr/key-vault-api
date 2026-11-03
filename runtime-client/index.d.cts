@@ -55,8 +55,11 @@ export interface ApplicationRuntime<T> {
   withValue<R>(operation: (value: T, context: Readonly<{ signal: AbortSignal; generation: number; digest: string; scope: Readonly<Scope> }>) => R | Promise<R>): Promise<R>;
   status(): Readonly<ApplicationRuntimeStatus>;
 }
-export function createApplicationRuntime<T>(options: { application: string; scope: Scope; environment: Record<string,string|undefined>; allowedMappings: readonly string[] | ((mapping: string) => boolean); requiredMappings?: readonly string[]; initial?: {snapshot: ApplicationSnapshot; prepared: PreparedApplicationValue<T>}; fetch?: typeof globalThis.fetch; credentialSupplier?: (scope: Readonly<Scope>) => string | Promise<string>; intervalMs?: number; operationTimeoutMs?: number; prepare: (snapshot: ApplicationSnapshot, context: ApplicationPrepareContext) => PreparedApplicationValue<T> | Promise<PreparedApplicationValue<T>>; prepareMigration?: (snapshot: ApplicationSnapshot, context: ApplicationPrepareContext) => PreparedApplicationValue<T> | Promise<PreparedApplicationValue<T>> }): ApplicationRuntime<T>;
+export function createApplicationRuntime<T>(options: { application: string; scope: Scope; environment: Record<string,string|undefined>; allowedMappings: readonly string[] | ((mapping: string) => boolean); requiredMappings?: readonly string[]; baseline?: ApplicationDescriptor; initial?: {snapshot: ApplicationSnapshot; prepared: PreparedApplicationValue<T>}; fetch?: typeof globalThis.fetch; credentialSupplier?: (scope: Readonly<Scope>) => string | Promise<string>; intervalMs?: number; operationTimeoutMs?: number; prepare: (snapshot: ApplicationSnapshot, context: ApplicationPrepareContext) => PreparedApplicationValue<T> | Promise<PreparedApplicationValue<T>>; prepareMigration?: (snapshot: ApplicationSnapshot, context: ApplicationPrepareContext) => PreparedApplicationValue<T> | Promise<PreparedApplicationValue<T>> }): ApplicationRuntime<T>;
 export function parseApplicationDescriptor(input: unknown, scope: Scope, application: string): ApplicationDescriptor;
 export function parseApplicationDescriptor(input: unknown, scope: Scope, application: string, values: true): ApplicationSnapshot;
 
 export function applicationSnapshotFromLegacy(application: string, snapshot: RuntimeSnapshot): ApplicationSnapshot;
+
+/** Metadata-only legacy pins for migration comparison; never a serving generation. */
+export function applicationDescriptorFromLegacy(application: string, scope: Scope, request: RuntimeSnapshotRequest): ApplicationDescriptor;

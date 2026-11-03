@@ -724,6 +724,11 @@ function createApplicationRuntime(options) {
       throw unavailable();
     }
   }
+  if (options.baseline) {
+    check(!options.initial);
+    migrationBaseline = parseDescriptor(options.baseline, scope, application);
+    check(migrationBaseline.resources.every((r) => allowed(r.mapping)));
+  }
   if (options.initial) {
     const initial = object(options.initial, ['snapshot', 'prepared']);
     const snapshot = parseDescriptor(
@@ -732,7 +737,11 @@ function createApplicationRuntime(options) {
       application,
       true,
     );
-    checkSnapshot(snapshot);
+    check(
+      snapshot.resources.every((r) => allowed(r.mapping)) &&
+        required.every((n) => snapshot.resources.some((r) => r.mapping === n)),
+    );
+    // A retained expired generation is never admitted, but its key baseline is still needed for safe recovery.
     check(
       initial.prepared &&
         Object.hasOwn(initial.prepared, 'value') &&
@@ -899,3 +908,31 @@ exports.createApplicationRuntime = (options) => {
   }
 };
 exports.parseApplicationDescriptor = parseDescriptor;
+
+// A manifest carries immutable pins, not a working generation. Neutral attributes here
+// are metadata placeholders; this descriptor is only for migration comparison.
+function applicationDescriptorFromLegacy(application, scope, input) {
+  const request = require('./index.cjs').parseSnapshotRequest(input);
+  check(request.keySets.length === 0);
+  const snapshot = applicationSnapshotFromLegacy(application, {
+    ...request,
+    ...scope,
+    generation: 0,
+    loadedAt: Date.now(),
+    secrets: request.secrets.map((s) => ({
+      ...s,
+      value: 'metadata-placeholder',
+      attributes: {
+        enabled: true,
+        created: 0,
+        updated: 0,
+        recoveryLevel: 'Purgeable',
+      },
+    })),
+  });
+  return freeze({
+    ...snapshot,
+    resources: snapshot.resources.map(({ value, ...resource }) => resource),
+  });
+}
+exports.applicationDescriptorFromLegacy = applicationDescriptorFromLegacy;

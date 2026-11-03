@@ -275,6 +275,8 @@ async function clientFixture(options: Record<string, unknown> = {}) {
   const config = { ...options };
   if (typeof config.initial === 'function')
     config.initial = await config.initial(f);
+  if (typeof config.baseline === 'function')
+    config.baseline = await config.baseline(f);
   let httpStatus = 200;
   const calls: string[] = [];
   const disposed: string[] = [];
@@ -921,5 +923,101 @@ it('converts legacy process pins into an immutable migration baseline and blocks
   await f.runtime.start();
   expect(await f.runtime.withValue((v) => v)).toBe('LEGACY_KEY');
   expect(f.runtime.status().reason).toBe('MigrationRequired');
+  f.runtime.close();
+});
+it('can recover from an expired retained startup version without discarding the encryption baseline or restarting', async () => {
+  const { applicationSnapshotFromLegacy, bindingDigest } =
+    await import('@kick-playr/local-key-vault/runtime-client');
+  const { vaultName } = await import('../src/manifest.js');
+  const f = await clientFixture({
+    initial: async (base: any) => {
+      const purpose = 'database',
+        name = vaultName(scope, 'secret', purpose),
+        old = newSecret({
+          value: 'EXPIRED',
+          attributes: { exp: Math.floor(Date.now() / 1000) - 1 },
+        });
+      const fresh = newSecret({ value: 'FRESH' });
+      base.ns().secrets = { [name]: [old, fresh] };
+      base.ns().resourceAssociations = {
+        ['secrets/' + name]: {
+          envName: 'DATABASE_URL',
+          memberships: { app: 'latest' },
+        },
+      };
+      base.ns().generation++;
+      const request = {
+        schemaVersion: 1 as const,
+        bindingRevision: 1,
+        keySets: [],
+        secrets: [{ mapping: 'DATABASE_URL', purpose, version: old.version }],
+      };
+      const snapshot = applicationSnapshotFromLegacy('app', {
+        ...request,
+        bindingDigest: bindingDigest(request),
+        ...scope,
+        generation: 1,
+        loadedAt: Date.now() - 5000,
+        secrets: [
+          {
+            ...request.secrets[0]!,
+            value: 'EXPIRED',
+            attributes: old.attributes,
+          },
+        ],
+      });
+      return { snapshot, prepared: { value: 'EXPIRED' } };
+    },
+  });
+  await expect(f.runtime.start()).rejects.toThrow(
+    'Application runtime unavailable',
+  );
+  await f.runtime.start();
+  expect(await f.runtime.withValue((v) => v)).toBe('FRESH');
+  f.runtime.close();
+});
+it('checks a metadata-only legacy baseline on cold startup without fetching obsolete secret values', async () => {
+  const { applicationDescriptorFromLegacy, bindingDigest } =
+    await import('@kick-playr/local-key-vault/runtime-client');
+  const { vaultName } = await import('../src/manifest.js');
+  const f = await clientFixture({
+    requiredMappings: ['CLERK_ENCRYPTION_KEY'],
+    baseline: async (base: any) => {
+      const purpose = 'clerk-encryption',
+        name = vaultName(scope, 'secret', purpose),
+        old = newSecret({ value: 'PRIVATE-OLD' }),
+        fresh = newSecret({ value: 'PRIVATE-NEW' });
+      base.ns().secrets = { [name]: [old, fresh] };
+      base.ns().resourceAssociations = {
+        ['secrets/' + name]: {
+          envName: 'CLERK_ENCRYPTION_KEY',
+          memberships: { app: 'latest' },
+        },
+      };
+      base.ns().generation++;
+      const request = {
+        schemaVersion: 1 as const,
+        bindingRevision: 1,
+        keySets: [],
+        secrets: [
+          { mapping: 'CLERK_ENCRYPTION_KEY', purpose, version: old.version },
+        ],
+      };
+      const baseline = applicationDescriptorFromLegacy('app', scope, {
+        ...request,
+        bindingDigest: bindingDigest(request),
+      });
+      expect(JSON.stringify(baseline)).not.toContain('PRIVATE-OLD');
+      return baseline;
+    },
+  });
+  await expect(f.runtime.start()).rejects.toThrow(
+    'Application runtime unavailable',
+  );
+  expect(f.runtime.status()).toMatchObject({
+    state: 'blocked',
+    reason: 'MigrationRequired',
+  });
+  await expect(f.runtime.withValue((v) => v)).rejects.toThrow();
   f.runtime.close();
 });

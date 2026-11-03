@@ -263,3 +263,5 @@ exports.createApplicationRuntime = require('./application-client.cjs').createApp
 exports.parseApplicationDescriptor = require('./application-client.cjs').parseApplicationDescriptor;
 
 exports.applicationSnapshotFromLegacy = require('./application-client.cjs').applicationSnapshotFromLegacy;
+
+exports.applicationDescriptorFromLegacy = require('./application-client.cjs').applicationDescriptorFromLegacy;

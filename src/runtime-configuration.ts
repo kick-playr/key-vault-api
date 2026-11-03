@@ -1,3 +1,4 @@
+import {runtimeReferences,inheritedConfiguration,inheritedTenant,inheritedApplications,type RuntimeReferenceRecord} from './runtime-inheritance.js';
 import {createHash} from 'node:crypto';
 import {applicationDescriptor} from './application-runtime.js';
 import type{MongoStore}from'./store.js';
@@ -34,40 +35,22 @@ export function importRuntimeConfiguration(input:unknown):RuntimeConfigurationDo
 }
 export function parseTenantTokens(header:unknown):Record<string,string>{if(header===undefined)return{};check(typeof header==='string'&&Buffer.byteLength(header)<=12288);let raw:unknown;try{raw=JSON.parse(header);}catch{fail(400,'BadParameter');}check(raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.keys(raw).length<=32);return Object.fromEntries(Object.entries(raw as Record<string,unknown>).map(([tenant,token])=>{check(scopePart(tenant)!=='_shared'&&typeof token==='string'&&/^[\x21-\x7e]{32,4096}$/.test(token));return[tenant,token as string];}));}
 type Authorize=(scope:Scope)=>Promise<void>;
-function requestSelections(request:RuntimeSnapshotRequest|undefined){return{secrets:request?.secrets.map(s=>({...s}))??[],keySets:request?.keySets.map(k=>structuredClone(k))??[]};}
 export class RuntimeConfigurationService{
  constructor(private readonly store:Pick<MongoStore,'read'|'transaction'>){}
  private root(scope:Scope){check(scope.tenant==='_shared'&&['development','dev','test'].includes(scope.environment));}
- async get(scope:Scope):Promise<RuntimeConfigurationRecord>{this.root(scope);return this.store.read(scope,ns=>{
-  if(ns?.runtimeConfiguration)return ns.runtimeConfiguration;
-  const applications:RuntimeConfigurationDocument['applications']={};const tenants=new Map<string,Set<string>>();
-  for(const name of new Set([...Object.keys(ns?.applications??{}),...Object.keys(ns?.runtimeManifests??{})])){
-   const manifest=ns?.runtimeManifests?.[name];const current=manifest?.versions[String(manifest.currentRevision)];const app=ns?.applications?.[name];
-   const selections=Object.entries(ns?.resourceAssociations??{}).flatMap(([ref,a])=>{if(!Object.hasOwn(a.memberships,name)||!ref.startsWith('secrets/'))return[];const versions=ns?.secrets[ref.slice(8)];const item=versions?.find(v=>v.version===a.memberships[name])??versions?.at(-1);if(!item?.tags?.purpose)return[];return[{purpose:item.tags.purpose,mapping:a.envName,version:a.memberships[name]}];});
-   applications[name]={displayName:labels[name]??app?.displayName??name,description:app?.description??'',secrets:selections.length?selections:requestSelections(current?.request).secrets};
-   for(const t of current?.tenants??[]){const set=tenants.get(t.tenant)??new Set();set.add(name);tenants.set(t.tenant,set);}
-  }
-  return{revision:0,configuration:{kind:'runtime-configuration',schemaVersion:1,id:scope.environment,applications,tenants:[...tenants].map(([tenant,names])=>({tenant,applications:[...names],secrets:[],keySets:[]}))}};
+ async get(scope:Scope):Promise<RuntimeConfigurationRecord & {availableApplications:RuntimeConfigurationDocument['applications']}>{this.root(scope);return this.store.read(scope,ns=>{
+  if(!ns)fail(404,'RuntimeNamespaceNotFound');
+  const saved=ns.runtimeConfiguration;const tenants=new Map<string,Set<string>>();for(const[name,r]of Object.entries(ns.runtimeManifests??{}))for(const t of r.versions[String(r.currentRevision)]?.tenants??[]){const names=tenants.get(t.tenant)??new Set<string>();names.add(name);tenants.set(t.tenant,names);}
+  const refs=saved?runtimeReferences(saved.configuration):runtimeReferences({kind:'runtime-configuration',schemaVersion:2,id:scope.environment,applications:Object.keys(ns.applications??{}),tenants:[...tenants].map(([tenant,apps])=>({tenant,applications:[...apps]}))});
+  return{revision:saved?.revision??0,...(saved?.publicationId?{publicationId:saved.publicationId}:{}),configuration:inheritedConfiguration(scope,refs,ns),availableApplications:inheritedApplications(scope,ns,Object.keys(ns.applications??{}))};
  });}
- async tenant(scope:Scope){check(scope.tenant!=='_shared');return this.store.read(scope,ns=>{
-  const requests=Object.values(ns?.runtimeManifests??{}).map(r=>r.versions[String(r.currentRevision)]!.request);const first=requests[0];
-  if(first)return{tenant:scope.tenant,...requestSelections(first),generation:ns?.generation??0};
-  const found=(Object.values(ns?.secrets??{}).map(v=>v.at(-1)).filter(v=>v?.tags?.purpose&&!v.tags.keySet));
-  return{tenant:scope.tenant,secrets:found.map(v=>({purpose:v!.tags!.purpose!,mapping:v!.tags!.envName??'',version:v!.version})),keySets:[],generation:ns?.generation??0};
- });}
- async import(scope:Scope,input:unknown,authorize:Authorize){
-  this.root(scope);const configuration=importRuntimeConfiguration(input);check(configuration.id===scope.environment);
-  for(const tenant of ['_shared',...configuration.tenants.map(t=>t.tenant)]){
-   try{await authorize({...scope,tenant});}catch(error){if(tenant==='_shared')throw error;continue;}
-   const ns=await this.store.read({...scope,tenant},n=>n);const list=tenant==='_shared'?Object.values(configuration.applications).flatMap(a=>a.secrets):configuration.tenants.find(t=>t.tenant===tenant)!.secrets;
-   for(const selection of list)if(selection.version===undefined){const versions=ns?.secrets[vaultName({...scope,tenant},'secret',selection.purpose)];if(versions?.length===1)selection.version=versions[0]!.version;else fail(409,'MissingOrAmbiguousRuntimeVersion');}
-  }
-  return{configuration};
- }
+ async tenant(scope:Scope){check(scope.tenant!=='_shared');return this.store.read(scope,ns=>{if(!ns)fail(404,'RuntimeNamespaceNotFound');return inheritedTenant(scope,ns);});}
+ async import(scope:Scope,input:unknown,authorize:Authorize){this.root(scope);const refs=runtimeReferences(input);check(refs.id===scope.environment);await authorize(scope);const root=await this.store.read(scope,n=>n);if(!root)fail(404,'RuntimeNamespaceNotFound');const tenants=new Map<string,Namespace>();for(const t of refs.tenants){try{await authorize({...scope,tenant:t.tenant});}catch{continue;}const ns=await this.store.read({...scope,tenant:t.tenant},n=>n);if(ns)tenants.set(t.tenant,ns);}return{configuration:inheritedConfiguration(scope,refs,root,tenants)};}
  async save(scope:Scope,input:unknown,authorize:Authorize):Promise<RuntimeConfigurationRecord>{
-  this.root(scope);const body=object(input,['expectedRevision','configuration','expectedGenerations']);check(Number.isSafeInteger(body.expectedRevision)&&(body.expectedRevision as number)>=0);const configuration=parseRuntimeConfiguration(body.configuration);check(configuration.id===scope.environment);
+  this.root(scope);const body=object(input,['expectedRevision','configuration','expectedGenerations']);check(Number.isSafeInteger(body.expectedRevision)&&(body.expectedRevision as number)>=0);const refs=runtimeReferences(body.configuration);check(refs.id===scope.environment);
   const current=await this.get(scope);if(current.revision!==body.expectedRevision)fail(409,'RuntimeConfigurationConflict');
-  const snapshots=new Map<string,Namespace>();for(const tenant of ['_shared',...configuration.tenants.map(t=>t.tenant)]){const s={...scope,tenant};await authorize(s);const ns=await this.store.read(s,n=>n);if(!ns)fail(404,'RuntimeNamespaceNotFound');snapshots.set(tenant,ns);}
+  const snapshots=new Map<string,Namespace>();for(const tenant of ['_shared',...refs.tenants.map(t=>t.tenant)]){const s={...scope,tenant};await authorize(s);const ns=await this.store.read(s,n=>n);if(!ns)fail(404,'RuntimeNamespaceNotFound');snapshots.set(tenant,ns);}
+  const configuration=inheritedConfiguration(scope,refs,snapshots.get('_shared')!,snapshots);
   const expected=body.expectedGenerations===undefined?{}:object(body.expectedGenerations,['_shared',...configuration.tenants.map(t=>t.tenant)]);for(const[tenant,generation]of Object.entries(expected))if(snapshots.get(tenant)?.generation!==generation)fail(409,'RuntimeConfigurationConflict');
   const select=(tenant:string,name:string,version:string|undefined)=>{const versions=snapshots.get(tenant)!.secrets[name];const item=version==='latest'?versions?.at(-1):version?versions?.find(v=>v.version===version):versions?.length===1?versions[0]:undefined;if(!item)fail(409,'MissingOrAmbiguousRuntimeVersion');active(item);return item;};
   const resolvedSecret=(tenant:string,s:SecretSelection)=>{const item=select(tenant,vaultName({...scope,tenant},'secret',s.purpose),s.version);if(item.tags?.purpose!==undefined&&item.tags.purpose!==s.purpose||item.tags?.envName!==undefined&&item.tags.envName!==s.mapping)fail(409,'CanonicalMappingConflict');if(s.version===undefined)s.version=item.version;return{...s,version:item.version};};
@@ -80,31 +63,19 @@ export class RuntimeConfigurationService{
    const refs=[];for(const entry of configuration.tenants.filter(t=>t.applications.includes(name))){const target=bindings.tenants.find(t=>t.scope.tenant===entry.tenant)!;const revision=(snapshots.get(entry.tenant)!.runtimeManifests?.[name]?.currentRevision??0)+1;const req={...target.request,bindingRevision:revision};req.bindingDigest=bindingDigest(req);const manifest:RuntimeManifest={schemaVersion:1,application:name,scope:target.scope,request:req,tenants:[]};tenantManifests.set(entry.tenant,[...(tenantManifests.get(entry.tenant)??[]),manifest]);refs.push({tenant:entry.tenant,bindingRevision:revision,bindingDigest:req.bindingDigest});}
    sharedManifests.push({schemaVersion:1,application:name,scope,request,tenants:refs});
   }
-  const applyCatalog=(ns:Namespace)=>{
-   ns.applications??={};ns.resourceAssociations??={};for(const[name,a]of Object.entries(configuration.applications)){if(ns.deletedApplications)ns.deletedApplications=ns.deletedApplications.filter(n=>n!==name);ns.applications[name]={...ns.applications[name],displayName:a.displayName,description:a.description};for(const association of Object.values(ns.resourceAssociations))delete association.memberships[name];for(const s of a.secrets){const ref='secrets/'+vaultName(scope,'secret',s.purpose),association=ns.resourceAssociations[ref];if(association&&association.envName!==s.mapping)fail(409,'CanonicalMappingConflict');(ns.resourceAssociations[ref]??={envName:s.mapping,memberships:{}}).memberships[name]=s.version!;}}
-  };
-  const staged=structuredClone(snapshots.get('_shared')!);applyCatalog(staged);for(const name of Object.keys(configuration.applications))applicationDescriptor(scope,name,staged);
+  for(const name of refs.applications)applicationDescriptor(scope,name,snapshots.get('_shared')!);
   // A configuration editor cannot use startup publication to bypass encryption migration.
   for(const manifest of [...sharedManifests,...[...tenantManifests.values()].flat()]){
    const ns=snapshots.get(manifest.scope.tenant)!;const old=ns.runtimeManifests?.[manifest.application];const prior=old?.versions[String(old.currentRevision)]?.request;
    if(prior){for(const oldSet of prior.keySets){const target=manifest.request.keySets.find(k=>k.reference===oldSet.reference);if(!target||oldSet.wrappingVersions.some(old=>!target.wrappingVersions.some(v=>v.keyVersion===old.keyVersion&&v.vaultVersion===old.vaultVersion)))fail(409,'EncryptionMigrationRequired');}const crypto=(r:RuntimeSnapshotRequest)=>[...r.keySets.flatMap(k=>[{name:tenantKeySet(manifest.scope,k.reference).entries[0]!.name,version:k.wrappingVersions.find(v=>v.keyVersion===k.currentWrappingVersion)!.vaultVersion},{name:tenantKeySet(manifest.scope,k.reference).entries[1]!.name,version:k.indexVersion},{name:tenantKeySet(manifest.scope,k.reference).entries[2]!.name,version:k.controlVersion}]),...r.secrets.filter(s=>/(?:ENCRYPTION_KEY|CREDENTIAL_KEY|WRAPPING_KEY_V\d+|INDEX_KEY|CONTROL_KEY|INVITATION_FLOW_KEY)$/.test(s.mapping)).map(s=>({name:vaultName(manifest.scope,'secret',s.purpose),version:s.version}))];const before=crypto(prior);for(const oldKey of before){const next=crypto(manifest.request).find(k=>k.name===oldKey.name&&k.version===oldKey.version)??crypto(manifest.request).find(k=>k.name===oldKey.name);if(!next||select(manifest.scope.tenant,next.name,next.version).value!==select(manifest.scope.tenant,oldKey.name,oldKey.version).value)fail(409,'EncryptionMigrationRequired');}}
   }
-  const applyTenantLinks=(ns:Namespace,manifests:RuntimeManifest[])=>{
-   ns.resourceAssociations??={};for(const manifest of manifests){const name=manifest.application;for(const a of Object.values(ns.resourceAssociations))delete a.memberships[name];
-    const link=(resource:string,mapping:string,version:string)=>{const ref='secrets/'+resource;const a=ns.resourceAssociations![ref];if(a&&a.envName!==mapping)fail(409,'CanonicalMappingConflict');(ns.resourceAssociations![ref]??={envName:mapping,memberships:{}}).memberships[name]=version;};
-    for(const secret of manifest.request.secrets)link(vaultName(manifest.scope,'secret',secret.purpose),secret.mapping,secret.version);
-    for(const k of manifest.request.keySets){const layout=tenantKeySet(manifest.scope,k.reference);link(layout.entries[0]!.name,k.mappings.wrapping,k.wrappingVersions.find(v=>v.keyVersion===k.currentWrappingVersion)!.vaultVersion);link(layout.entries[1]!.name,k.mappings.index,k.indexVersion);link(layout.entries[2]!.name,k.mappings.control,k.controlVersion);}
-   }
-  };
-  for(const[tenant,manifests]of tenantManifests)applyTenantLinks(structuredClone(snapshots.get(tenant)!),manifests);
   const publicationId=createHash('sha256').update(JSON.stringify([body.expectedRevision,configuration],(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))):value)).digest('hex');
   const held:string[]=[];
   try{
-  for(const[tenant,manifests]of tenantManifests){await this.store.transaction({...scope,tenant},ns=>{if(ns.generation!==snapshots.get(tenant)!.generation)fail(409,'RuntimeConfigurationConflict');const staged=structuredClone(ns);applyTenantLinks(staged,manifests);if(Object.keys(ns.runtimeLinkPublications??{}).length>=32)fail(409,'RuntimePublicationLimit');ns.runtimePublicationReservation=publicationId;(ns.runtimeLinkPublications??={})[publicationId]={baseGeneration:ns.generation,applicationRevision:(ns.applicationRevision??0)+1,associations:staged.resourceAssociations??{}};publishManifests(ns,{...scope,tenant},manifests);},{runtimePublicationId:publicationId});held.push(tenant);}
+  for(const[tenant,manifests]of tenantManifests){await this.store.transaction({...scope,tenant},ns=>{if(ns.generation!==snapshots.get(tenant)!.generation)fail(409,'RuntimeConfigurationConflict');if(Object.keys(ns.runtimeLinkPublications??{}).length>=32)fail(409,'RuntimePublicationLimit');ns.runtimePublicationReservation=publicationId;(ns.runtimeLinkPublications??={})[publicationId]={baseGeneration:ns.generation,applicationRevision:ns.applicationRevision??0,effectiveManifests:Object.fromEntries(manifests.map(m=>[m.application,{revision:m.request.bindingRevision,digest:m.request.bindingDigest,policies:Object.fromEntries(configuration.tenants.find(t=>t.tenant===tenant)!.secrets.map(s=>[vaultName({...scope,tenant},'secret',s.purpose),s.version!]))}]))};publishManifests(ns,{...scope,tenant},manifests);},{runtimePublicationId:publicationId});held.push(tenant);}
   const saved=await this.store.transaction(scope,ns=>{if((ns.runtimeConfiguration?.revision??0)!==body.expectedRevision||ns.generation!==snapshots.get('_shared')!.generation)fail(409,'RuntimeConfigurationConflict');
-   applyCatalog(ns);
    ns.runtimeTenantPublications??={};for(const tenant of tenantManifests.keys())ns.runtimeTenantPublications[tenant]=publicationId;
-   publishManifests(ns,scope,sharedManifests);ns.applicationRevision=(ns.applicationRevision??0)+1;ns.runtimeConfiguration={revision:(body.expectedRevision as number)+1,publicationId,configuration};changed(ns,'runtime.configuration.save',configuration.id);return ns.runtimeConfiguration;
+   publishManifests(ns,scope,sharedManifests);const record:RuntimeReferenceRecord={revision:(body.expectedRevision as number)+1,publicationId,configuration:refs};ns.runtimeConfiguration=record;changed(ns,'runtime.configuration.save',configuration.id);return{...record,configuration};
   });
 
   return saved;

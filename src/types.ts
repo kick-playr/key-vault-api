@@ -13,12 +13,14 @@ export interface OAuthCredential {
  attempts: {operationId: string; expectedVersion: string; version?: string; digest?: string}[];
 }
 export interface ResourceAssociation { envName: string; memberships: Record<string, string> }
+export interface RuntimeEffectiveManifest {revision:number;digest:string;policies?:Record<string,string>}
 export interface Namespace {
+  runtimeEffectiveManifests?:Record<string,RuntimeEffectiveManifest>;
   runtimeTenantPublications?:Record<string,string>;
   runtimePublicationReservation?:string;
-  runtimeLinkPublications?:Record<string,{baseGeneration:number;applicationRevision:number;associations:Record<string,ResourceAssociation>}>;
+  runtimeLinkPublications?:Record<string,{baseGeneration:number;applicationRevision:number;associations?:Record<string,ResourceAssociation>;effectiveManifests?:Record<string,RuntimeEffectiveManifest>}>;
   runtimeIdentities?: Record<string,import('./runtime-identity.js').RuntimeIdentity>;
-  runtimeConfiguration?: import('./runtime-configuration.js').RuntimeConfigurationRecord;
+  runtimeConfiguration?: import('./runtime-configuration.js').RuntimeConfigurationRecord | import('./runtime-inheritance.js').RuntimeReferenceRecord;
   internalScope?: Scope;
   deletedApplications?: string[];
   applicationReservations?: Record<string,Record<string,boolean>>;

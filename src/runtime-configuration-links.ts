@@ -3,7 +3,8 @@ import type{Namespace}from'./types.js';import{fail}from'./errors.js';
 export function materializeRuntimeLinks(ns:Namespace|undefined,publicationId:string|undefined):Namespace|undefined{
  if(!ns||!publicationId)return ns;const staged=ns.runtimeLinkPublications?.[publicationId];if(!staged)return ns;
  if(ns.generation!==staged.baseGeneration)fail(409,'RuntimeConfigurationConflict');
- ns.resourceAssociations=structuredClone(staged.associations);ns.applicationRevision=staged.applicationRevision;ns.generation=staged.baseGeneration+1;
+ if(staged.effectiveManifests)ns.runtimeEffectiveManifests={...ns.runtimeEffectiveManifests,...structuredClone(staged.effectiveManifests)};
+ if(staged.associations)ns.resourceAssociations=structuredClone(staged.associations);ns.applicationRevision=staged.applicationRevision;ns.generation=staged.baseGeneration+1;
  delete ns.runtimeLinkPublications![publicationId];
  if(ns.runtimePublicationReservation===publicationId)delete ns.runtimePublicationReservation;return ns;
 }

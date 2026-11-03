@@ -1,3 +1,4 @@
+import {runtimeResourceAssociations} from './runtime-effective-bindings.js';
 import {
   createHash,
   randomBytes,
@@ -172,7 +173,7 @@ export function applicationDescriptor(
   const resources: ApplicationRuntimeResource[] = [];
   const keySets = new Map<string, Set<string>>();
   for (const [reference, association] of Object.entries(
-    ns.resourceAssociations ?? {},
+    runtimeResourceAssociations(scope,application,ns),
   )) {
     const policy = has(association.memberships, application);
     if (policy === undefined) continue;
@@ -345,7 +346,7 @@ export class ApplicationRuntimeService {
     });
     return this.store.read(scope, (ns) => {
       for (const r of refs) {
-        const association = has(ns?.resourceAssociations, `secrets/${r.name}`);
+        const association = has(runtimeResourceAssociations(scope,application,ns), `secrets/${r.name}`);
         if (!association || !has(association.memberships, application))
           fail(403, 'ApplicationInUseUnavailable');
         let item;
@@ -379,7 +380,7 @@ export class ApplicationRuntimeService {
       if (
         scope.tenant === '_shared'
           ? !has(ns.applications, application)
-          : !Object.values(ns.resourceAssociations ?? {}).some((r) =>
+          : !Object.values(runtimeResourceAssociations(scope,application,ns)).some((r) =>
               has(r.memberships, application),
             )
       )

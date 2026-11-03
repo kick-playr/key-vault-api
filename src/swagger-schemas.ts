@@ -13,10 +13,10 @@ const obj = (properties: SchemaObject['properties'], required: string[] = []): S
 export const schemas: Record<string, SchemaObject> = {
   RuntimeAccessStatus: obj({application:text,tenant:text,identityConfigured:{type:'boolean'},authorized:{type:'boolean'},oauthAuthorized:{type:'boolean'}},['application','tenant','identityConfigured','authorized']),
   RuntimeAccessChange: obj({allow:{type:'boolean'},oauth:{type:'boolean',description:'Explicit provider enrollment/renewal; requires renew permission as well as read/write/list.'}},['allow']),
-  RuntimeConfiguration: {type:'object',description:'Environment configuration revision and metadata-only binding document. No grant tokens or values.'},
-  RuntimeConfigurationDocument: {type:'object',description:'Versioned configuration or legacy metadata-only plan. Explicit app assignments and Latest/pinned policies; no values.'},
+  RuntimeConfiguration: {type:'object',description:'Environment revision with inherited read-only binding preview and availableApplications catalog. No grant tokens or values.'},
+  RuntimeConfigurationDocument: {type:'object',description:'SchemaVersion 2 runtime references: kind runtime-configuration, id, applications array of slugs, tenants array of tenant/application assignments. Legacy rich documents/plans import assignments only; canonical definitions always win.'},
   RuntimeConfigurationSave: obj({expectedRevision:{type:'integer',minimum:0},configuration:ref('RuntimeConfigurationDocument'),expectedGenerations:{type:'object',additionalProperties:{type:'integer',minimum:0}}},['expectedRevision','configuration']),
-  RuntimeConfigurationTenant: {type:'object',description:'Tenant slug, secret and key-set selections, generation; no values.'},
+  RuntimeConfigurationTenant: {type:'object',description:'Tenant slug, inherited read-only secret/key definitions and generation; no values.'},
   ApplicationMode: obj({schemaVersion:{type:'integer',enum:[2]},application:text,scope:obj({environment:text,tenant:text},['environment','tenant']),mode:{type:'string',enum:['legacy','live']}},['schemaVersion','application','scope','mode']),
   ApplicationInUse: obj({valid:{type:'boolean'}},['valid']),
   ApplicationInUseSelector: obj({resources:{type:'array',maxItems:100,items:obj({name:text,version:text},['name','version'])}},['resources']),

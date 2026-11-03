@@ -15,7 +15,7 @@ export class RuntimeIdentityService{
  async authorize(auth:unknown,scope:Scope,application:string){applicationName(application);scopePart(scope.environment);scopePart(scope.tenant);if(typeof auth!=='string'||!/^Bearer [\x21-\x7e]{32,4096}$/.test(auth))fail(401,'Unauthorized');return this.store.read({environment:scope.environment,tenant:'_shared'},ns=>{
   const identity=ns?.runtimeIdentities?.[application];if(!identity?.enabled||identity.environment!==scope.environment||!timingSafeEqual(Buffer.from(identity.tokenHash,'hex'),Buffer.from(hash(auth.slice(7)),'hex')))fail(401,'Unauthorized');
   const config=ns?.runtimeConfiguration?.configuration;const rootManifest=ns?.runtimeManifests?.[application];const manifest=rootManifest?.versions[String(rootManifest.currentRevision)];
-  if(config?!Object.hasOwn(config.applications,application):!ns?.applications?.[application]&&!manifest)fail(403,'Forbidden');
+  if(config?!(Array.isArray(config.applications)?config.applications.includes(application):Object.hasOwn(config.applications,application)):!ns?.applications?.[application]&&!manifest)fail(403,'Forbidden');
   if(scope.tenant!=='_shared'&&(!identity.tenants.includes(scope.tenant)||!(config?config.tenants.some(t=>t.tenant===scope.tenant&&t.applications.includes(application)):manifest?.tenants.some(t=>t.tenant===scope.tenant))))fail(403,'Forbidden');return identity.id;
  });}
 }

@@ -200,7 +200,9 @@ function createApplicationRuntime(options) {
       operationTimeout > 0 &&
       operationTimeout <= 300000,
   );
-  let tokenSupplier = options.credentialSupplier;
+  const applicationToken=env.LOCAL_KEYVAULT_APPLICATION_TOKEN;
+  if(applicationToken!==undefined)text(applicationToken,/^[\x21-\x7e]{32,4096}$/);
+  let tokenSupplier = applicationToken ? ()=>applicationToken : options.credentialSupplier;
   if (!tokenSupplier) {
     check(
       typeof env.LOCAL_KEYVAULT_AUTH_JSON === 'string' &&
@@ -264,7 +266,7 @@ function createApplicationRuntime(options) {
       response = await abortable(
         fetcher(
           url.origin +
-            '/local/application-runtime/' +
+            (applicationToken ? '/local/runtime-access/'+application+'/application-runtime/' : '/local/application-runtime/') +
             application +
             '/' +
             action,

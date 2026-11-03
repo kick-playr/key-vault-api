@@ -134,7 +134,9 @@ function json(text, max = 1048576) { check(typeof text === 'string' && Buffer.by
 function createRuntime(options) {
   check(typeof window === 'undefined');
   const env = { ...options.environment }, strategy = selectSecretsStrategy(env), fetcher = options.fetch ?? globalThis.fetch;
-  let closed = false, startupDeadline; const controllers = new Set(), cache = new Map(), pending = new Map();
+  const applicationToken = env.LOCAL_KEYVAULT_APPLICATION_TOKEN;
+  if (applicationToken !== undefined) check(typeof applicationToken === 'string' && /^[\x21-\x7e]{32,4096}$/.test(applicationToken));
+  let closed = false, startupDeadline, refreshPromise; const controllers = new Set(), cache = new Map(), pending = new Map();
   let base, bindings, auth, activeApplication;
   const discovery = env.LOCAL_KEYVAULT_BINDINGS_JSON === undefined, manifestPromises = new Map(), bindingPromises = new Map();
   const manifestEnvironment = env.LOCAL_KEYVAULT_ENVIRONMENT ?? 'development';
@@ -150,31 +152,32 @@ function createRuntime(options) {
     for (const b of entries) { object(b, ['scope', 'request']); b.scope = scope(b.scope); check(['development', 'dev', 'test'].includes(b.scope.environment)); b.request = parseSnapshotRequest(b.request); for (const k of b.request.keySets) check(k.reference.split(':')[1] === b.scope.tenant); }
     for (const b of Object.values(bindings.applications)) check(b.scope.tenant === '_shared' && b.request.keySets.length === 0);
     for (const b of bindings.tenants) { check(b.scope.tenant !== '_shared' && !seenTenants.has(b.scope.tenant)); seenTenants.add(b.scope.tenant); }
-    auth = options.credentialSupplier ? { schemaVersion: 1, grants: [] } : object(json(env.LOCAL_KEYVAULT_AUTH_JSON, 131072), ['schemaVersion', 'grants']); check(auth.schemaVersion === 1 && Array.isArray(auth.grants) && (auth.grants.length > 0 || typeof options.credentialSupplier === 'function') && auth.grants.length <= 64);
+    auth = options.credentialSupplier || applicationToken ? { schemaVersion: 1, grants: [] } : object(json(env.LOCAL_KEYVAULT_AUTH_JSON, 131072), ['schemaVersion', 'grants']); check(auth.schemaVersion === 1 && Array.isArray(auth.grants) && (auth.grants.length > 0 || applicationToken || typeof options.credentialSupplier === 'function') && auth.grants.length <= 64);
     const scopes = new Set();
     for (const grant of auth.grants) { object(grant, ['environment', 'tenant', 'token']); const g = scope({ environment: grant.environment, tenant: grant.tenant }), id = JSON.stringify(g); check(!scopes.has(id) && typeof grant.token === 'string' && /^[\x21-\x7e]{32,4096}$/.test(grant.token)); scopes.add(id); }
   }
   function active() { check(!closed); }
-  async function requestJson(selectedScope, path, method, body, validate, maxBytes = 4 * 1024 * 1024) {
-    active(); startupDeadline ??= Date.now() + 30000; const remaining = startupDeadline - Date.now(); check(remaining > 0);
+  async function requestJson(selectedScope, path, method, body, validate, maxBytes = 4 * 1024 * 1024, requestBudgetMs) {
+    active(); startupDeadline ??= Date.now() + 30000; const remaining = Math.min(startupDeadline - Date.now(),requestBudgetMs??30000); check(remaining > 0);
     const controller = new AbortController(); controllers.add(controller); const timeout = setTimeout(() => controller.abort(), remaining);
     try {
       const grant = auth.grants.find(g => g.environment === selectedScope.environment && g.tenant === selectedScope.tenant);
-      const token = options.credentialSupplier ? await abortable(Promise.resolve().then(() => options.credentialSupplier(Object.freeze({ ...selectedScope }))), AbortSignal.any([controller.signal, AbortSignal.timeout(5000)])) : grant?.token;
+      const token = applicationToken ?? (options.credentialSupplier ? await abortable(Promise.resolve().then(() => options.credentialSupplier(Object.freeze({ ...selectedScope }))), AbortSignal.any([controller.signal, AbortSignal.timeout(5000)])) : grant?.token);
       check(typeof token === 'string' && /^[\x21-\x7e]{32,4096}$/.test(token));
       for (let attempt = 0; attempt < 3; attempt++) {
         active(); let response;
         try {
-          response = await fetcher(base + path, { method, redirect: 'error', cache: 'no-store', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-vault-environment': selectedScope.environment, 'x-vault-tenant': selectedScope.tenant }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+          check(!applicationToken || activeApplication);
+          response = await fetcher(base + (applicationToken ? '/local/runtime-access/' + activeApplication + path.slice(6) : path), { method, redirect: 'error', cache: 'no-store', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-vault-environment': selectedScope.environment, 'x-vault-tenant': selectedScope.tenant }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
         } catch { if (attempt === 2 || controller.signal.aborted) throw unavailable(); await delay(250 * (attempt + 1), controller.signal); continue; }
         if (response.status === 503 && attempt < 2) { await response.body?.cancel(); await delay(250 * (attempt + 1), controller.signal); continue; }
-        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) { await response.body?.cancel(); throw unavailable(); }
+        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) { await response.body?.cancel(); const error=unavailable();error.status=response.status;throw error; }
         const reader = response.body?.getReader(); check(reader); const chunks = []; let size = 0;
         try { for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; check(size <= maxBytes); chunks.push(Buffer.from(part.value)); } } finally { await reader.cancel().catch(() => undefined); }
         const result = validate(JSON.parse(Buffer.concat(chunks).toString('utf8'))); active(); return result;
       }
       throw unavailable();
-    } catch { throw unavailable(); } finally { clearTimeout(timeout); controllers.delete(controller); }
+    } catch(error) { const sanitized=unavailable();if([401,403,404,409,503].includes(error?.status))sanitized.status=error.status;throw sanitized; } finally { clearTimeout(timeout); controllers.delete(controller); }
   }
   async function load(scopeInput, requestInput) {
     active(); check(strategy === 'LOCAL_KEYVAULT');
@@ -187,17 +190,18 @@ function createRuntime(options) {
     const operation = requestJson(selectedScope, '/local/runtime-snapshot', 'POST', request, raw => validateSnapshot(raw, selectedScope, request)).then(snapshot => { active(); cache.set(id, snapshot); return snapshot; });
     pending.set(id, operation); try { return await operation; } finally { pending.delete(id); }
   }
-  function manifest(application, selectedScope, revision) {
+  function manifest(application, selectedScope, revision, requestBudgetMs) {
     active(); check(typeof application === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(application));
     const id = JSON.stringify([application, selectedScope, revision ?? 'current']);
     if (!manifestPromises.has(id)) manifestPromises.set(id, requestJson(selectedScope, '/local/runtime-manifests/' + application + (revision === undefined ? '' : '/' + revision), 'GET', undefined, raw => {
       const result = parseRuntimeManifest(raw);
       check(result.application === application && result.scope.environment === selectedScope.environment && result.scope.tenant === selectedScope.tenant && (revision === undefined || result.request.bindingRevision === revision));
       return freeze(result);
-    }, 131072).catch(error=>{if(revision!==undefined)manifestPromises.delete(id);throw error;}));
+    }, 131072,requestBudgetMs).catch(error=>{if(revision!==undefined)manifestPromises.delete(id);throw error;}));
     return manifestPromises.get(id);
   }
   async function processBinding(application) {
+    if(applicationToken){check(activeApplication===undefined||activeApplication===application);activeApplication=application;}
     if (!discovery) { check(own(bindings.applications, application)); return bindings.applications[application]; }
     if (activeApplication === undefined) activeApplication = application;
     check(activeApplication === application);
@@ -217,6 +221,7 @@ function createRuntime(options) {
     check(m.request.bindingDigest === ref.bindingDigest);
     let b = bindings.tenants.find(b => b.scope.tenant === tenant);
     if (!b) { b = { scope: m.scope, request: m.request }; bindings.tenants.push(b); }
+    else { b.scope=m.scope;b.request=m.request; }
     return b;
   }
   async function loadApplication(application) {
@@ -241,6 +246,31 @@ function createRuntime(options) {
     }
     return freeze(structuredClone(bindings));
   }
+  async function refreshBindings(application) {
+    active();check(strategy==='LOCAL_KEYVAULT');
+    if(!discovery)return loadBindings(application);
+    if(refreshPromise)return refreshPromise;
+    refreshPromise=(async()=>{
+      startupDeadline=Date.now()+30000;manifestPromises.clear();bindingPromises.delete(application);
+      await processBinding(application);
+      const parent=await manifest(application,{environment:manifestEnvironment,tenant:'_shared'});
+      const results=await Promise.allSettled(parent.tenants.map(async ref=>{
+        const selectedScope={environment:manifestEnvironment,tenant:ref.tenant};
+        const child=await manifest(application,selectedScope,ref.bindingRevision,2000);
+        check(child.request.bindingDigest===ref.bindingDigest);
+        return {scope:child.scope,request:child.request};
+      }));
+      active();const assigned=new Set(parent.tenants.map(t=>t.tenant));for(const key of cache.keys()){const selected=JSON.parse(key)[0];if(selected.tenant!=='_shared'&&!assigned.has(selected.tenant))cache.delete(key);}
+      bindings.applications[application]={scope:parent.scope,request:parent.request};
+      bindings.tenants=results.flatMap((result,index)=>{
+        if(result.status==='fulfilled')return[result.value];
+        const tenant=parent.tenants[index].tenant;
+        if([401,403].includes(result.reason?.status)){for(const key of cache.keys())if(JSON.parse(key)[0].tenant===tenant)cache.delete(key);return[];}
+        const previous=bindings.tenants.find(t=>t.scope.tenant===tenant);return previous?[previous]:[];
+      });
+      const result=freeze(structuredClone(bindings));bindingPromises.set(application,Promise.resolve(result));return result;
+    })().finally(()=>{refreshPromise=undefined;});return refreshPromise;
+  }
   async function loadProcess(application, policy) {
     active(); check(Array.isArray(policy.allowedMappings) && policy.allowedMappings.length <= 256 && new Set(policy.allowedMappings).size === policy.allowedMappings.length); policy.allowedMappings.forEach(mapping);
     const required = policy.requiredMappings ?? []; check(Array.isArray(required) && required.every(name => policy.allowedMappings.includes(name)));
@@ -254,7 +284,7 @@ function createRuntime(options) {
     active(); check(strategy === 'LOCAL_KEYVAULT'); const b = await tenantBinding(tenant, revision); return load(b.scope, b.request);
   }
   function close() { closed = true; for (const c of controllers) c.abort(); controllers.clear(); cache.clear(); pending.clear(); manifestPromises.clear(); bindingPromises.clear(); if (auth) auth.grants.length = 0; }
-  return Object.freeze({ load, loadApplication, loadTenantBinding, loadBindings, loadProcess, loadTenant, close });
+  return Object.freeze({ load, loadApplication, loadTenantBinding, loadBindings, refreshBindings, loadProcess, loadTenant, close });
 }
 function abortable(promise, signal) { return new Promise((resolve, reject) => { function abort() { reject(unavailable()); } signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); Promise.resolve(promise).then(resolve, () => reject(unavailable())).finally(() => signal.removeEventListener('abort', abort)); }); }
 function delay(ms, signal) { return new Promise((resolve, reject) => { const timer = setTimeout(done, ms); function done() { signal.removeEventListener('abort', abort); resolve(); } function abort() { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(unavailable()); } signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); }); }

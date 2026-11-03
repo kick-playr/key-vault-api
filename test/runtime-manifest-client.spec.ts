@@ -90,3 +90,32 @@ it('discovers one tenant without fetching unrelated tenant manifests and retries
  const runtime=createSecretsRuntime({environment:f.environment,fetch:async(input,init)=>{if(String(input).endsWith('/2')&&failOnce){return Response.json({error:{code:'Temporary'}},{status:503});}return f.fetch(input,init);}});
  try{await expect(runtime.loadTenantBinding('club-api','fcrww')).rejects.toThrow();failOnce=false;const loaded=await runtime.loadTenantBinding('club-api','fcrww');expect(loaded.request.bindingRevision).toBe(2);expect(f.calls.some(c=>c.url.endsWith('/3'))).toBe(false);}finally{runtime.close();}
 });
+
+it('refreshes tenant assignments in the same runtime and isolates unavailable children',async()=>{
+ const f=fixture();let includeSecond=false,denySecond=false;const secondRequest=request('TENANT_SECRET',3);
+ const runtime=createSecretsRuntime({environment:f.environment,fetch:async(url,options={})=>{
+  const selected=(options.headers as Record<string,string>)['x-vault-tenant'];
+  if(String(url).endsWith('/local/runtime-manifests/club-api'))return Response.json({...f.parent,tenants:[...f.parent.tenants,...(includeSecond?[{tenant:'fcuster',bindingRevision:3,bindingDigest:secondRequest.bindingDigest}]:[])]});
+  if(selected==='fcuster')return denySecond?Response.json({},{status:403}):Response.json({schemaVersion:1,application:'club-api',scope:{...shared,tenant:'fcuster'},request:secondRequest,tenants:[]});
+  return f.fetch(url,options);
+ }});
+ try{
+  expect((await runtime.refreshBindings('club-api')).tenants).toHaveLength(1);includeSecond=true;
+  // New per-tenant credentials can be supplied without rebuilding the runtime.
+  // In this legacy fixture the absent grant keeps only the new scope unavailable.
+  expect((await runtime.refreshBindings('club-api')).tenants).toHaveLength(1);
+  denySecond=true;expect((await runtime.refreshBindings('club-api')).tenants).toHaveLength(1);
+ }finally{runtime.close();}
+});
+
+it('adds an authorized tenant with one stable app token and no env changes',async()=>{
+ const f=fixture();let second=false,deny=false;const childRequest=request('TENANT_SECRET',3);const applicationToken='application-identity-token-aaaaaaaaaaaaaaaa';const environment={NODE_ENV:'development',SECRETS_KEYS_STRATEGY:'LOCAL_KEYVAULT',LOCAL_KEYVAULT_APPLICATION_TOKEN:applicationToken};const before=JSON.stringify(environment);
+ const runtime=createSecretsRuntime({environment,fetch:async(url,options={})=>{
+  expect(String(url)).toContain('/local/runtime-access/club-api/');expect(new Headers(options.headers).get('Authorization')).toBe('Bearer '+applicationToken);
+  const tenantId=new Headers(options.headers).get('x-vault-tenant');
+  if(String(url).endsWith('/runtime-manifests/club-api'))return Response.json({...f.parent,tenants:[...f.parent.tenants,...(second?[{tenant:'fcuster',bindingRevision:3,bindingDigest:childRequest.bindingDigest}]:[])]});
+  if(tenantId==='fcuster')return deny?Response.json({},{status:403}):Response.json({schemaVersion:1,application:'club-api',scope:{...shared,tenant:'fcuster'},request:childRequest,tenants:[]});
+  return f.fetch(String(url).replace('/local/runtime-access/club-api','/local'),options);
+ }});
+ try{expect((await runtime.refreshBindings('club-api')).tenants).toHaveLength(1);second=true;expect((await runtime.refreshBindings('club-api')).tenants.map(t=>t.scope.tenant)).toEqual(['fcrww','fcuster']);deny=true;expect((await runtime.refreshBindings('club-api')).tenants.map(t=>t.scope.tenant)).toEqual(['fcrww']);expect(JSON.stringify(environment)).toBe(before);}finally{runtime.close();}
+});

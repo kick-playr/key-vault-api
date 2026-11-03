@@ -23,6 +23,8 @@ export const schemas: Record<string, SchemaObject> = {
   ApplicationAcknowledged: obj({accepted:{type:'boolean'},expiresAt:{type:'integer'}},['accepted','expiresAt']),
   ApplicationRuntimeStatus: {type:'object',description:'Bounded reported instances, last seen and adoption state. No caller credentials or instance proofs; self reports are not security attestations.'},
   ApplicationRevision: obj({ expectedRevision: { type: 'integer', minimum: 0 } }, ['expectedRevision']),
+  ApplicationUsage: obj({links:{type:'integer',minimum:0},manifests:{type:'integer',minimum:0},instances:{type:'integer',minimum:0},pending:{type:'integer',minimum:0},verified:{type:'boolean'},inUse:{type:'boolean'}},['links','manifests','instances','pending','verified','inUse']),
+  ApplicationDelete: obj({expectedRevision:{type:'integer',minimum:0},confirmName:{type:'string',minLength:1,maxLength:64}},['expectedRevision','confirmName']),
   ApplicationSave: obj({ expectedRevision: { type: 'integer', minimum: 0 }, displayName: { type: 'string', minLength: 1, maxLength: 128 }, description: { type: 'string', maxLength: 512 } }, ['expectedRevision', 'displayName']),
   ApplicationLinks: obj({ expectedRevision: {type:'integer',minimum:0}, updates:{type:'array',minItems:1,maxItems:500,items:obj({kind:{type:'string',enum:['keys','secrets']},name:text,selected:{type:'boolean'},envName:text,version:text},['kind','name','selected'])}},['expectedRevision','updates']),
   ApplicationLink: obj({ expectedRevision: { type: 'integer', minimum: 0 }, envName: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,127}$' }, version: { type: 'string', description: 'latest or an exact immutable 32-character hexadecimal version' } }, ['expectedRevision', 'envName', 'version']),

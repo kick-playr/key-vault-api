@@ -5,7 +5,7 @@ const scope = { environment: 'development', tenant: '_shared' };
 function fixture() {
   const states = new Map<string, Namespace>();
   const state = (s: Scope) => { const id = JSON.stringify(s); if (!states.has(id)) states.set(id, emptyNamespace()); return states.get(id)!; };
-  const store = { read: async (s: Scope, fn: any) => structuredClone(fn(structuredClone(state(s)))), transaction: async (s: Scope, fn: any) => {
+  const store = { applicationUsage:async(s:Scope,name:string)=>{let links=0,manifests=0,instances=0;for(const [id,ns]of states){if(JSON.parse(id).environment!==s.environment)continue;links+=Object.values(ns.resourceAssociations??{}).filter(r=>Object.hasOwn(r.memberships,name)).length;manifests+=ns.runtimeManifests?.[name]?1:0;instances+=Object.values(ns.runtimeInstances??{}).filter(r=>r.application===name&&r.expiresAt>Date.now()).length;}return{links,manifests,instances,verified:true};},read: async (s: Scope, fn: any) => structuredClone(fn(structuredClone(state(s)))), transaction: async (s: Scope, fn: any) => {
     const copy = structuredClone(state(s)); const result = await fn(copy); states.set(JSON.stringify(s), copy); return structuredClone(result);
   } };
   return { service: new ApplicationsService(store as any), state };
@@ -70,7 +70,7 @@ it('protects application HTTP mutations with exact namespace write grants and au
   const ns = emptyNamespace(); ns.secrets['database'] = [newSecret({ value: 'HTTP_VALUE_CANARY' })];
   const grant = { id: 'a'.repeat(64), tokenHash: createHash('sha256').update(token).digest('hex'), ...scope, permissions: ['list', 'write'], enabled: true };
   const events: unknown[] = [];
-  const store = { readGrants: async () => [grant], read: async (_: unknown, fn: any) => structuredClone(fn(structuredClone(ns))), transaction: async (_: unknown, fn: any) => { const copy = structuredClone(ns); const result = await fn(copy); Object.assign(ns, copy); return structuredClone(result); }, appendAudit: async (event: unknown) => { events.push(event); }, close: async () => {} };
+  const store = { applicationUsage:async()=>({links:Object.values(ns.resourceAssociations??{}).filter(r=>Object.hasOwn(r.memberships,'club-api')).length,manifests:0,instances:0,verified:true}),readGrants: async () => [grant], read: async (_: unknown, fn: any) => structuredClone(fn(structuredClone(ns))), transaction: async (_: unknown, fn: any) => { const copy = structuredClone(ns); const result = await fn(copy); Object.assign(ns, copy); return structuredClone(result); }, appendAudit: async (event: unknown) => { events.push(event); }, close: async () => {} };
   const spy = jest.spyOn(MongoStore, 'open').mockResolvedValue(store as any);
   const app = await createApp({ mongoUri: 'mongodb://127.0.0.1:1/fixture', masterKey: randomBytes(32), baseUrl: 'http://127.0.0.1:4000', audit: { read: 'collection', write: 'collection', list: 'collection', crypto: 'off' } });
   spy.mockRestore(); await app.init();
@@ -82,12 +82,19 @@ it('protects application HTTP mutations with exact namespace write grants and au
     expect(JSON.stringify(result.body)).not.toContain('HTTP_VALUE_CANARY');
     await call('get', '/namespaces/development/_shared/local/applications').expect(200);
     await call('get').set('x-vault-tenant', 'other').expect(403);
+    await call('get','/local/applications/club-api/usage').expect(200).expect(r=>expect(r.body.inUse).toBe(true));
+    await call('delete','/local/applications/club-api').send({expectedRevision:2,confirmName:'club-api'}).expect(409);
     grant.permissions = ['list'];
+    await call('delete','/local/applications/club-api').send({expectedRevision:2,confirmName:'club-api'}).expect(403);
     await call('put', '/local/applications/club-api').send({ expectedRevision: 2, displayName: 'Changed' }).expect(403);
     grant.permissions = ['write'];
     await call('get').expect(403);
     grant.permissions = ['list', 'write'];
     await call('delete', '/local/applications/club-api/resources/secrets/database').send({ expectedRevision: 2 }).expect(200);
+    await call('delete','/local/applications/club-api').send({expectedRevision:3,confirmName:'other'}).expect(400);
+    await call('delete','/local/applications/club-api').send({expectedRevision:2,confirmName:'club-api'}).expect(409);
+    await call('delete','/local/applications/club-api').send({expectedRevision:3,confirmName:'club-api'}).expect(200);
+    expect(ns.secrets.database![0]!.value).toBe('HTTP_VALUE_CANARY');
     await app.close();
     expect(events.some((e: any) => e.action === 'local.applications.write')).toBe(true);
     expect(JSON.stringify(events)).not.toContain('HTTP_VALUE_CANARY');
@@ -150,3 +157,6 @@ it('batch links non-exportable keys, keeps unloaded links and rejects stale or d
  await expect(f.service.updateLinks(scope,'club-api',{expectedRevision:3,updates:[{...update,envName:'OTHER'}]})).rejects.toThrow('CanonicalMappingConflict');
  expect((await f.service.list(scope)).revision).toBe(3);
 });
+it('requires unused shared application, matching name and revision before removal, retaining secret bytes',async()=>{const f=fixture();await f.service.save(scope,'unused',{expectedRevision:0,displayName:'Unused',description:''});f.state(scope).secrets.keep=[newSecret({value:'KEEP'})];await expect(f.service.remove(scope,'unused',{expectedRevision:1,confirmName:'other'})).rejects.toThrow();await expect(f.service.remove(scope,'unused',{expectedRevision:0,confirmName:'unused'})).rejects.toThrow();const result=await f.service.remove(scope,'unused',{expectedRevision:1,confirmName:'unused'});expect(result.applications).toHaveLength(0);expect(f.state(scope).secrets.keep![0]!.value).toBe('KEEP');});
+it('blocks removal for references or active consumers and refuses unavailable usage verification',async()=>{const f=fixture();await f.service.save(scope,'unused',{expectedRevision:0,displayName:'Unused',description:''});f.state(scope).runtimeInstances={live:{application:'unused',expiresAt:Date.now()+30000} as any};await expect(f.service.remove(scope,'unused',{expectedRevision:1,confirmName:'unused'})).rejects.toThrow('ApplicationInUse');});
+it('counts tenant links and runtime enrollment as usage without returning tenant/resource details',async()=>{const f=fixture();await f.service.save(scope,'custom',{expectedRevision:0,displayName:'Custom',description:''});const tenant={...scope,tenant:'private-tenant'};f.state(tenant).resourceAssociations={'secrets/private-resource':{envName:'PRIVATE_ENV',memberships:{custom:'latest'}}};expect(await f.service.usage(scope,'custom')).toMatchObject({links:1,inUse:true});await expect(f.service.remove(scope,'custom',{expectedRevision:1,confirmName:'custom'})).rejects.toThrow('ApplicationInUse');expect(JSON.stringify(await f.service.usage(scope,'custom'))).not.toContain('private-tenant');await expect(f.service.remove(tenant,'custom',{expectedRevision:0,confirmName:'custom'})).rejects.toThrow('SharedScopeRequired');});

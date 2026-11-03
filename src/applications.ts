@@ -31,7 +31,7 @@ export interface ApplicationsView { revision: number; generation: number; enviro
 
 /** Metadata only. No value, private key or grant material is returned. */
 export class ApplicationsService {
-  constructor(private readonly store: Pick<MongoStore, 'read' | 'transaction'>) {}
+  constructor(private readonly store: Pick<MongoStore, 'read' | 'transaction' | 'applicationUsage'>) {}
   private catalog(scope: Scope) { return this.store.read({ environment: scope.environment, tenant: '_shared' }, ns => ns?.applications ?? {}); }
   private project(scope: Scope, ns: Namespace | undefined, catalog: NonNullable<Namespace['applications']>): ApplicationsView {
     const associations = ns?.resourceAssociations ?? {};
@@ -65,10 +65,32 @@ export class ApplicationsService {
       const description = text(body.description ?? '', 512);
       const applications = ns.applications ??= {};
       if (!Object.hasOwn(applications, name) && Object.keys(applications).length >= 100) fail(409, 'ApplicationLimit');
+      if(ns.deletedApplications)ns.deletedApplications=ns.deletedApplications.filter(n=>n!==name);
       applications[name] = { displayName, description, ...(has(applications,name)?.liveEnabled ? {liveEnabled:true}: {}) };
       ns.applicationRevision = (ns.applicationRevision ?? 0) + 1;
       changed(ns, 'application.save', name);
       return this.project(scope, ns, applications);
+    });
+  }
+  async usage(scope:Scope,name:string){
+    applicationName(name);if(scope.tenant!=='_shared')fail(400,'SharedScopeRequired');
+    if(!has(await this.catalog(scope),name))fail(404,'ApplicationNotFound');
+    const usage=await this.store.applicationUsage(scope,name);
+    const pending=await this.store.read(scope,ns=>Object.keys(ns?.applicationReservations?.[name]??{}).length);
+    return{...usage,pending,inUse:!!(usage.links||usage.manifests||usage.instances||pending)};
+  }
+  async remove(scope:Scope,name:string,input:unknown):Promise<ApplicationsView>{
+    applicationName(name);if(scope.tenant!=='_shared')fail(400,'SharedScopeRequired');
+    return this.store.transaction(scope,async ns=>{
+      const body=revision(ns,input,['confirmName']);check(body.confirmName===name);
+      if(!has(ns.applications,name))fail(404,'ApplicationNotFound');
+      const usage=await this.store.applicationUsage(scope,name);
+      if(!usage.verified)fail(409,'ApplicationUsageUnavailable');
+      if(usage.links||usage.manifests||usage.instances||Object.keys(ns.applicationReservations?.[name]??{}).length)fail(409,'ApplicationInUse');
+      ns.deletedApplications=[...new Set([...(ns.deletedApplications??[]),name])];
+      delete ns.applications![name];
+      ns.applicationRevision=(ns.applicationRevision??0)+1;changed(ns,'application.delete',name);
+      return this.project(scope,ns,ns.applications!);
     });
   }
   private applyLink(ns: Namespace, application: string, kind: Kind, name: string, body: Record<string,unknown>) {

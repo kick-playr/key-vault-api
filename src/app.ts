@@ -116,6 +116,12 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Applications', 'List application models and linked resource metadata in this namespace', 'list', 'Applications', undefined, true)
     @Get('local/applications') @Permissions('list')
     applicationsList(@Req() req: ScopedRequest) { return applications.list(req.vaultScope); }
+    @VaultEndpoint('Applications','Check aggregate application usage before deletion','list','ApplicationUsage',undefined,true)
+    @Get('local/applications/:application/usage') @Permissions('list')
+    applicationUsage(@Req() req:ScopedRequest,@Param('application') application:string){return applications.usage(req.vaultScope,application);}
+    @VaultEndpoint('Applications','Delete an unused application after explicit confirmation','write and list','Applications','ApplicationDelete',true)
+    @Delete('local/applications/:application') @Permissions('write','list')
+    applicationRemove(@Req() req:ScopedRequest,@Param('application') application:string,@Body() body:unknown){return applications.remove(req.vaultScope,application,body);}
     @VaultEndpoint('Applications', 'Create or edit an application in shared scope', 'write and list', 'Applications', 'ApplicationSave', true)
     @Put('local/applications/:application') @Permissions('write', 'list')
     applicationSave(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { return applications.save(req.vaultScope, application, body); }

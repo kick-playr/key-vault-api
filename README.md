@@ -495,3 +495,20 @@ Verification uses synthetic providers and storage. No live grants, keys, tenant
 data, running services or deployments are changed by these implementation checks;
 real MongoDB transaction topology and live provider behavior require separate
 rollout verification.
+
+### Deleting an application
+
+In `_shared`, use **Delete application** to check usage, then type the application
+name and confirm. Deletion is blocked by resource links, persisted runtime
+manifest enrollments, active consumer reports or pending reference writes. An
+offline enrolled consumer still counts as usage. Secret/key values and versions
+are never deleted by this operation.
+
+`GET /local/applications/:application/usage` requires `list`; `DELETE` on the
+application requires `write` and `list`, `expectedRevision` and `confirmName`.
+Only aggregate counts are returned. The server repeats verification at deletion,
+and concurrent namespace references reserve the catalog entry before committing.
+Deleted-name markers reject late enrollment; explicit recreation permits reuse.
+Legacy namespaces whose scope cannot be verified and ambiguous pending writes
+block deletion rather than guessing. Pending reservations are not automatically
+expired; uncertain operations require reconciliation.

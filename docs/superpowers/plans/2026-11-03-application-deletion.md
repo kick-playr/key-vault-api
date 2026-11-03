@@ -1,0 +1,11 @@
+# Application deletion implementation plan
+
+Goal: delete an unused application only after checking usage and explicit confirmation. User approved blocking deletion while used. Keep all secrets/keys. Work directly on development; preserve unrelated UI next-env.d.ts.
+
+Architecture: shared catalog owns app records. Server checks links, current enrolled runtime manifests, live consumer reports and pending writes across stored namespaces. Return only aggregate metadata. Recheck in the catalog CAS at deletion, require matching app name and model revision. Namespace mutations reserve referenced app names in the catalog before committing, preventing deletion from racing new tenant links/enrollment/reports. Reservations have no unsafe automatic expiry; ambiguous writes fail closed. Store encrypted scope metadata on writes; infer older namespace scope only from authenticated matching manifest scope. Unknown older references block deletion rather than guess their environment.
+
+1. Add store usage scan and race protection; application usage GET + guarded DELETE with shared-only grants, explicit confirmation, revision CAS/audit. Tests: links/consumers/manifests/pending/unknown scope block; wrong confirmation and stale revision reject; unused removal retains values; concurrent tenant reference cannot bypass.
+2. Add exact UI proxy routes and Delete button. Fetch fresh usage first; show blocking reasons or accessible confirmation naming the application. Confirm sends DELETE; cancel no mutation; server conflicts retain model. Dirty draft and namespace changes must invalidate dialog.
+3. Run focused/full API/UI suites, types/builds, diff checks; bump once per changed repo, commit/push development. No live deletion, services, PR/merge/deploy.
+
+Verified: API207 tests/24suites, UI94 tests, both builds/typechecks and diff checks pass. Real temporary MongoDB tests cover pending-reference race, late link rejection, verified other-environment isolation, late/shared manifest enrollment rejection, recreation and legacy compatibility. HTTP tests cover usage, in-use rejection, permissions, wrong confirmation, stale revision and value preservation. Independent review found tenant/shared enrollment bypasses; deleted-name checks and regressions close both. Versions API0.1.9/UI0.1.15. No live deletion/services/deployment; unrelated UI next-env.d.ts retained.

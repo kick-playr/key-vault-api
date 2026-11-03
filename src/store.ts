@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Collection, Db, MongoClient, MongoServerError } from 'mongodb';
-import { describeSystemError, fail } from './errors.js';
+import { describeSystemError, fail, VaultError } from './errors.js';
 import { emptyNamespace, Namespace, Scope, scopeId } from './types.js';
 import { scopePart } from './validation.js';
 import type { StoredGrant } from './grants.js';
@@ -94,7 +94,56 @@ export class MongoStore {
     return structuredClone(fn(ns));
   }
   transaction<T>(scope: Scope, fn: (namespace: Namespace) => T | Promise<T>): Promise<T> {
-    return this.transactionDocument(this.collection, this.id(scope), emptyNamespace, fn);
+    const holds=new Set<string>(),operation=randomBytes(16).toString('hex');
+    const shared={environment:scope.environment,tenant:'_shared'};
+    let settled=false;
+    return this.transactionDocument(this.collection,this.id(scope),emptyNamespace,async ns=>{
+      ns.internalScope={...scope};
+      const priorInstances=structuredClone(ns.runtimeInstances??{});
+      const prior=new Set(this.references(ns));
+      const priorLinks=new Set(Object.values(ns.resourceAssociations??{}).flatMap(r=>Object.keys(r.memberships)));
+      const result=await fn(ns);
+      if(scope.tenant==='_shared'&&this.references(ns).some(name=>!prior.has(name)&&ns.deletedApplications?.includes(name)))fail(404,'ApplicationNotFound');
+      if(scope.tenant!=='_shared'){
+        const renewing=Object.values(ns.runtimeInstances??{}).filter(r=>!Object.values(priorInstances).some(old=>old.application===r.application&&old.expiresAt===r.expiresAt)).map(r=>r.application);
+        const names=[...new Set([...this.references(ns).filter(name=>!prior.has(name)),...renewing])];
+        if(names.length)await this.transactionDocument(this.collection,this.id(shared),emptyNamespace,catalog=>{
+          const reservations=catalog.applicationReservations??={};
+          for(const name of names){if(catalog.deletedApplications?.includes(name))fail(404,'ApplicationNotFound');if(renewing.includes(name)&&!Object.hasOwn(catalog.applications??{},name))fail(404,'ApplicationNotFound');if(Object.values(ns.resourceAssociations??{}).some(r=>Object.hasOwn(r.memberships,name))&&!priorLinks.has(name)&&!Object.hasOwn(catalog.applications??{},name))fail(404,'ApplicationNotFound');const entries=Object.hasOwn(reservations,name)?reservations[name]!:Object.create(null) as Record<string,boolean>;Object.defineProperty(reservations,name,{value:entries,writable:true,enumerable:true,configurable:true});if(Object.keys(entries).length>=256&&!entries[operation])fail(409,'ApplicationChangesPending');entries[operation]=true;holds.add(name);}
+        });
+      }
+      return result;
+    }).then(result=>{settled=true;return result;},error=>{if(error instanceof VaultError&&error.code!=='StoreUnavailable')settled=true;throw error;}).finally(async()=>{
+      // Unknown commit outcomes retain their reservation: never assume a late write stopped.
+      if(settled&&holds.size)await this.transactionDocument(this.collection,this.id(shared),emptyNamespace,catalog=>{
+        for(const name of holds){const entries=catalog.applicationReservations&&Object.hasOwn(catalog.applicationReservations,name)?catalog.applicationReservations[name]:undefined;if(entries){delete entries[operation];if(!Object.keys(entries).length)delete catalog.applicationReservations![name];}}
+      });
+    });
+  }
+  private references(ns:Namespace):string[]{
+    return [...new Set([
+      ...Object.values(ns.resourceAssociations??{}).flatMap(r=>Object.keys(r.memberships)),
+      ...Object.keys(ns.runtimeManifests??{}),
+      ...Object.values(ns.runtimeInstances??{}).filter(r=>r.expiresAt>Date.now()).map(r=>r.application),
+    ])];
+  }
+  async applicationUsage(scope:Scope,application:string){
+    if(this.closed)fail(503,'StoreUnavailable');
+    const result={links:0,manifests:0,instances:0,verified:true};let count=0;
+    const cursor=this.collection.find({},{maxTimeMS:5000}).batchSize(1);
+    try{for await(const envelope of cursor){
+      if(++count>10000)fail(503,'ApplicationUsageUnavailable');
+      const ns=this.decode(envelope) as Namespace;
+      if(!this.references(ns).includes(application))continue;
+      const candidates=[ns.internalScope,...Object.values(ns.runtimeManifests??{}).flatMap(r=>Object.values(r.versions).map(v=>v.scope))].filter((s):s is Scope=>!!s);
+      const found=candidates.find(s=>this.id(s)===envelope._id);
+      const known=found??(this.id({...scope,tenant:'_shared'})===envelope._id?{...scope,tenant:'_shared'}:undefined);
+      if(!known){result.verified=false;continue;}
+      if(known.environment!==scope.environment)continue;
+      result.links+=Object.values(ns.resourceAssociations??{}).filter(r=>Object.hasOwn(r.memberships,application)).length;
+      if(ns.runtimeManifests?.[application])result.manifests++;
+      result.instances+=Object.values(ns.runtimeInstances??{}).filter(r=>r.application===application&&r.expiresAt>Date.now()).length;
+    }return result;}catch{fail(503,'ApplicationUsageUnavailable');}finally{await cursor.close().catch(()=>{});}
   }
   async readGrants(): Promise<StoredGrant[]> {
     const envelope = await this.fetch('grants:registry', this.database.collection<Envelope>('vault_grants'));

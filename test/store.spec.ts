@@ -1,3 +1,4 @@
+import { ApplicationsService } from '../src/applications.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { MongoClient } from 'mongodb';
 import { MongoStore } from '../src/store.js';
@@ -92,4 +93,46 @@ describe('encrypted MongoDB store', () => {
     await expect(store.read(scope, ns => ns?.tombstones)).rejects.toThrow(/^StoreUnavailable$/);
     expect(await store.read(scope, ns => ns?.tombstones)).toEqual(['before']);
   });
+  it('blocks deletion during a reserved tenant reference and rejects a late link after deletion wins',async()=>{
+    store=await MongoStore.open(config());second=await MongoStore.open(config());
+    const shared={environment:'dev',tenant:'_shared'},app=new ApplicationsService(store),other=new ApplicationsService(second);
+    await app.save(shared,'custom',{expectedRevision:0,displayName:'Custom',description:''});
+    let reached!:()=>void,release!:()=>void;
+    const blocked=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>reached=r);
+    const collection=(store as any).collection,original=collection.insertOne.bind(collection);
+    collection.insertOne=async(envelope:any,...args:any[])=>{if(envelope._id===id()){reached();await blocked;}return original(envelope,...args);};
+    const writing=store.transaction(scope,ns=>{ns.resourceAssociations={'secrets/sample':{envName:'SAMPLE',memberships:{custom:'latest'}}};});
+    try{await waiting;expect((await other.usage(shared,'custom')).pending).toBe(1);await expect(other.remove(shared,'custom',{expectedRevision:1,confirmName:'custom'})).rejects.toThrow('ApplicationInUse');}
+    finally{release();await writing;}
+    expect(await app.usage(shared,'custom')).toMatchObject({links:1,pending:0,inUse:true});
+    await store.transaction(scope,ns=>{ns.resourceAssociations={};});
+    let finish!:()=>void,started!:()=>void;
+    const held=new Promise<void>(r=>finish=r),ready=new Promise<void>(r=>started=r);
+    const late=store.transaction(scope,async ns=>{ns.resourceAssociations={'secrets/sample':{envName:'SAMPLE',memberships:{custom:'latest'}}};started();await held;});
+    await ready;try{await other.remove(shared,'custom',{expectedRevision:1,confirmName:'custom'});}finally{finish();}
+    await expect(late).rejects.toThrow('ApplicationNotFound');
+    expect(await store.read(scope,ns=>ns?.resourceAssociations)).toEqual({});
+  });
+  it('does not treat a verified other-environment reference as current usage',async()=>{
+    store=await MongoStore.open(config());const service=new ApplicationsService(store),shared={environment:'dev',tenant:'_shared'};
+    for(const environment of ['dev','prod'])await service.save({environment,tenant:'_shared'},'custom',{expectedRevision:0,displayName:'Custom',description:''});
+    await store.transaction({environment:'prod',tenant:'other'},ns=>{ns.resourceAssociations={'secrets/value':{envName:'VALUE',memberships:{custom:'latest'}}};});
+    expect(await service.usage(shared,'custom')).toMatchObject({links:0,verified:true,inUse:false});
+    await service.remove(shared,'custom',{expectedRevision:1,confirmName:'custom'});
+    expect((await service.list({environment:'prod',tenant:'_shared'})).applications).toHaveLength(1);
+  });
+
+  it('blocks a late manifest enrollment for a deleted name while preserving never-modeled legacy publication',async()=>{
+    store=await MongoStore.open(config());second=await MongoStore.open(config());const shared={environment:'dev',tenant:'_shared'};
+    const app=new ApplicationsService(store);await app.save(shared,'custom',{expectedRevision:0,displayName:'Custom',description:''});
+    await app.remove(shared,'custom',{expectedRevision:1,confirmName:'custom'});
+    await expect(second.transaction(scope,ns=>{ns.runtimeManifests={custom:{currentRevision:1,versions:{'1':{scope,application:'custom'} as any}}};})).rejects.toThrow('ApplicationNotFound');
+    expect(await second.read(scope,ns=>ns?.runtimeManifests)).toBeUndefined();
+    await expect(second.transaction(shared,ns=>{ns.runtimeManifests={custom:{currentRevision:1,versions:{'1':{scope:shared,application:'custom'} as any}}};})).rejects.toThrow('ApplicationNotFound');
+    await second.transaction(scope,ns=>{ns.runtimeManifests={legacy:{currentRevision:1,versions:{'1':{scope,application:'legacy'} as any}}};});
+    await app.save(shared,'custom',{expectedRevision:2,displayName:'Recreated',description:''});
+    await second.transaction(scope,ns=>{ns.runtimeManifests!.custom={currentRevision:1,versions:{'1':{scope,application:'custom'} as any}};});
+    expect((await app.usage(shared,'custom')).manifests).toBe(1);
+  });
+
 });

@@ -58,6 +58,7 @@ const has = <T>(
   key: string,
 ): T | undefined => (map && Object.hasOwn(map, key) ? map[key] : undefined);
 const sharedMappings: Record<string, readonly string[]> = {
+  'vault-app': ['CLERK_SECRET_KEY', 'CLERK_ENCRYPTION_KEY'],
   app: [
     'CLERK_SECRET_KEY',
     'CLERK_ENCRYPTION_KEY',
@@ -161,6 +162,7 @@ export function applicationDescriptor(
   ns: Namespace | undefined,
 ): ApplicationDescriptor {
   applicationName(application);
+  if(application==='vault-app'&&scope.tenant!=='_shared')fail(403,'Forbidden');
   scopePart(scope.environment);
   scopePart(scope.tenant);
   if (!['development', 'dev', 'test'].includes(scope.environment))

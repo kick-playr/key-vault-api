@@ -4,7 +4,7 @@ import { fail, requireCondition as check } from './errors.js';
 import { envName, identifier, object } from './validation.js';
 import { active, changed, find, type Kind } from './vault.js';
 
-const SUPPORTED = new Set(['club-api', 'app', 'explorer-api', 'explorer']);
+const SUPPORTED = new Set(['club-api', 'app', 'explorer-api', 'explorer', 'vault-app']);
 export function applicationName(value: unknown): string {
   check(typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value));
   check(!['constructor', 'prototype', '__proto__'].includes(value));

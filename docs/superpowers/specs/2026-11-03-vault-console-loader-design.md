@@ -1,0 +1,8 @@
+# Vault console managed secrets
+User approved automatic Vault APP loading and the Club API permission changes necessary to replace legacy grant JSON.
+
+Add a finite `vault-app` shared-only application contract for CLERK_SECRET_KEY and CLERK_ENCRYPTION_KEY. Its bootstrap identity can read only its own runtime bindings, never generic operator operations or tenant scopes. Vault UI continues to require Clerk sign-in plus operator-provided scoped Vault grants. Reuse live SDK polling and immutable per-request secret views, with dynamic Clerk middleware options and one-time installation of the dedicated encryption key before Clerk SDK import. Middleware/API errors fail closed with sanitized503; mid-render failures are sanitized Next render errors and never expose the console; ENV strategy remains compatible. Existing Clerk secret bytes are imported unchanged, new encryption key is dedicated to this new dynamic request handoff.
+
+Provision only the new app's metadata/snapshot, preserving all existing business-app manifests and tenant publication selectors. Backup current ENV files privately; replace Vault APP/Club API direct or grant JSON credentials with distinct application tokens. Club API's explicit provider capability is allowed for already linked provider tenant scopes as user authorized, never generic secret writes. No services started/restarted.
+
+Development bootstrap changes replace the cached source by a nonlogged configuration fingerprint. SDK warning/blocked states fail closed, including migration-required states. Clerk encryption defaults remain immutable within a worker; initial ENV-to-Vault rollouts need a fresh worker if Clerk was already imported (Next dev may perform this reload itself). No claim of arbitrary hot encryption-key rotation.

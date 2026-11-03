@@ -529,8 +529,13 @@ it('expired registrations cannot accept reports and new registration stays bound
 });
 it('retains the key migration baseline across denial and credential recovery', async () => {
   const prepared: string[] = [];
+  let managed = 0;
   const f = await clientFixture({
     requiredMappings: ['CLERK_ENCRYPTION_KEY'],
+    prepareManagedCredential: async () => {
+      managed++;
+      return { value: 'BYPASS' };
+    },
     prepare: async (snapshot: any) => {
       prepared.push(snapshot.resources[0].version);
       return { value: snapshot.resources[0].value };
@@ -548,6 +553,7 @@ it('retains the key migration baseline across denial and credential recovery', a
   f.setStatus(200);
   await f.runtime.refresh();
   expect(prepared).toHaveLength(1);
+  expect(managed).toBe(0);
   expect(f.runtime.status()).toMatchObject({
     state: 'blocked',
     reason: 'MigrationRequired',
@@ -726,9 +732,14 @@ it('fences traffic during migration and keeps it fenced after partial migration 
   f.runtime.close();
 });
 it('cannot clear a failed migration fence by pointing metadata back at the old key', async () => {
-  let attempts = 0;
+  let attempts = 0,
+    managed = 0;
   const f = await clientFixture({
     requiredMappings: ['CLERK_ENCRYPTION_KEY'],
+    prepareManagedCredential: async () => {
+      managed++;
+      return { value: 'BYPASS' };
+    },
     prepareMigration: async () => {
       attempts++;
       throw Error('migration requires recovery');
@@ -755,6 +766,7 @@ it('cannot clear a failed migration fence by pointing metadata back at the old k
   f.ns().generation++;
   await f.runtime.refresh();
   expect(attempts).toBe(2);
+  expect(managed).toBe(0);
   expect(f.runtime.status()).toMatchObject({
     state: 'blocked',
     reason: 'MigrationFailed',
@@ -1021,29 +1033,241 @@ it('checks a metadata-only legacy baseline on cold startup without fetching obso
   await expect(f.runtime.withValue((v) => v)).rejects.toThrow();
   f.runtime.close();
 });
-it('treats manager invitation cookie keys as encryption material in live and legacy baselines',async()=>{
- const f=fixture();f.ns().resourceAssociations!['secrets/arbitrary-database-name']!.envName='MANAGER_INVITATION_FLOW_KEY';
- expect((await f.service.desired(scope,'app')).resources[0]!.classification).toBe('encryption-key');
- const {applicationDescriptorFromLegacy,bindingDigest}=await import('@kick-playr/local-key-vault/runtime-client');
- const input={schemaVersion:1 as const,bindingRevision:1,keySets:[],secrets:[{mapping:'MANAGER_INVITATION_FLOW_KEY',purpose:'invitation-flow',version:'a'.repeat(32)}]};
- expect(applicationDescriptorFromLegacy('app',scope,{...input,bindingDigest:bindingDigest(input)}).resources[0]!.classification).toBe('encryption-key');
+it('treats manager invitation cookie keys as encryption material in live and legacy baselines', async () => {
+  const f = fixture();
+  f.ns().resourceAssociations!['secrets/arbitrary-database-name']!.envName =
+    'MANAGER_INVITATION_FLOW_KEY';
+  expect(
+    (await f.service.desired(scope, 'app')).resources[0]!.classification,
+  ).toBe('encryption-key');
+  const { applicationDescriptorFromLegacy, bindingDigest } =
+    await import('@kick-playr/local-key-vault/runtime-client');
+  const input = {
+    schemaVersion: 1 as const,
+    bindingRevision: 1,
+    keySets: [],
+    secrets: [
+      {
+        mapping: 'MANAGER_INVITATION_FLOW_KEY',
+        purpose: 'invitation-flow',
+        version: 'a'.repeat(32),
+      },
+    ],
+  };
+  expect(
+    applicationDescriptorFromLegacy('app', scope, {
+      ...input,
+      bindingDigest: bindingDigest(input),
+    }).resources[0]!.classification,
+  ).toBe('encryption-key');
 });
-it('converts tenant legacy key pins into canonical v2 names without reading private values',async()=>{
- const {applicationDescriptorFromTenantLegacy,bindingDigest}=await import('@kick-playr/local-key-vault/runtime-client');
- const selected={environment:'development',tenant:'club'};
- const request={schemaVersion:1 as const,bindingRevision:3,keySets:[{reference:'workflow-local:club:key',mappings:{wrapping:'CLUB_WRAPPING_KEY_V1',index:'CLUB_INDEX_KEY',control:'CLUB_CONTROL_KEY'},currentWrappingVersion:'v1',wrappingVersions:[{keyVersion:'v1',vaultVersion:'a'.repeat(32)}],indexVersion:'b'.repeat(32),controlVersion:'c'.repeat(32)}],secrets:[]};
- const descriptor=applicationDescriptorFromTenantLegacy('explorer-api',selected,{...request,bindingDigest:bindingDigest(request)});
- expect(descriptor.resources).toHaveLength(3);expect(descriptor.resources.every(r=>r.classification==='encryption-key')).toBe(true);expect(descriptor.resources.find(r=>r.mapping==='CLUB_WRAPPING_KEY_V1')!.name).toMatch(/^tk-wrapping-[a-f0-9]{64}$/);
+it('converts tenant legacy key pins into canonical v2 names without reading private values', async () => {
+  const { applicationDescriptorFromTenantLegacy, bindingDigest } =
+    await import('@kick-playr/local-key-vault/runtime-client');
+  const selected = { environment: 'development', tenant: 'club' };
+  const request = {
+    schemaVersion: 1 as const,
+    bindingRevision: 3,
+    keySets: [
+      {
+        reference: 'workflow-local:club:key',
+        mappings: {
+          wrapping: 'CLUB_WRAPPING_KEY_V1',
+          index: 'CLUB_INDEX_KEY',
+          control: 'CLUB_CONTROL_KEY',
+        },
+        currentWrappingVersion: 'v1',
+        wrappingVersions: [{ keyVersion: 'v1', vaultVersion: 'a'.repeat(32) }],
+        indexVersion: 'b'.repeat(32),
+        controlVersion: 'c'.repeat(32),
+      },
+    ],
+    secrets: [],
+  };
+  const descriptor = applicationDescriptorFromTenantLegacy(
+    'explorer-api',
+    selected,
+    { ...request, bindingDigest: bindingDigest(request) },
+  );
+  expect(descriptor.resources).toHaveLength(3);
+  expect(
+    descriptor.resources.every((r) => r.classification === 'encryption-key'),
+  ).toBe(true);
+  expect(
+    descriptor.resources.find((r) => r.mapping === 'CLUB_WRAPPING_KEY_V1')!
+      .name,
+  ).toMatch(/^tk-wrapping-[a-f0-9]{64}$/);
 });
-it('admits only reviewed ordinary tenant Mongo and Clerk slots alongside private runtime credentials',async()=>{
- const f=fixture();f.ns().applications={'club-api':{displayName:'Club',description:''},'explorer-api':{displayName:'Explorer',description:''}};
- for(const application of ['club-api','explorer-api'])for(const mapping of ['MONGODB_URI','CLERK_SECRET_KEY','RUNTIME_CREDENTIAL_ABCDEF1234567890ABCDEF12']){
- f.ns().resourceAssociations={'secrets/arbitrary-database-name':{envName:mapping,memberships:{[application]:'latest'}}};
- const d=await f.service.desired({...scope,tenant:'club'},application);expect(d.resources[0]!.classification).toBe(application==='club-api'&&mapping.startsWith('RUNTIME_CREDENTIAL_')?'managed-credential':'secret');}
+it('admits only reviewed ordinary tenant Mongo and Clerk slots alongside private runtime credentials', async () => {
+  const f = fixture();
+  f.ns().applications = {
+    'club-api': { displayName: 'Club', description: '' },
+    'explorer-api': { displayName: 'Explorer', description: '' },
+  };
+  for (const application of ['club-api', 'explorer-api'])
+    for (const mapping of [
+      'MONGODB_URI',
+      'CLERK_SECRET_KEY',
+      'RUNTIME_CREDENTIAL_ABCDEF1234567890ABCDEF12',
+    ]) {
+      f.ns().resourceAssociations = {
+        'secrets/arbitrary-database-name': {
+          envName: mapping,
+          memberships: { [application]: 'latest' },
+        },
+      };
+      const d = await f.service.desired(
+        { ...scope, tenant: 'club' },
+        application,
+      );
+      expect(d.resources[0]!.classification).toBe(
+        application === 'club-api' && mapping.startsWith('RUNTIME_CREDENTIAL_')
+          ? 'managed-credential'
+          : 'secret',
+      );
+    }
 });
-it('retains distinct wrapping aliases for one immutable key when only index/control rotates',async()=>{
- const {bindingDigest,parseSnapshotRequest}=await import('@kick-playr/local-key-vault/runtime-client');
- const k={reference:'workflow-local:club:key',mappings:{wrapping:'CLUB_WRAPPING_KEY_V1',index:'CLUB_INDEX_KEY',control:'CLUB_CONTROL_KEY'},currentWrappingVersion:'a'.repeat(32),wrappingVersions:[{keyVersion:'v1',vaultVersion:'a'.repeat(32)},{keyVersion:'a'.repeat(32),vaultVersion:'a'.repeat(32)}],indexVersion:'b'.repeat(32),controlVersion:'c'.repeat(32)};
- const body={schemaVersion:1 as const,bindingRevision:4,keySets:[k],secrets:[]};const parsed=parseSnapshotRequest({...body,bindingDigest:bindingDigest(body)});expect(parsed.keySets[0]!.wrappingVersions).toHaveLength(2);
- const duplicate={...body,keySets:[{...k,wrappingVersions:[k.wrappingVersions[0]!,k.wrappingVersions[0]!]}]};expect(()=>bindingDigest(duplicate)).toThrow();
+it('retains distinct wrapping aliases for one immutable key when only index/control rotates', async () => {
+  const { bindingDigest, parseSnapshotRequest } =
+    await import('@kick-playr/local-key-vault/runtime-client');
+  const k = {
+    reference: 'workflow-local:club:key',
+    mappings: {
+      wrapping: 'CLUB_WRAPPING_KEY_V1',
+      index: 'CLUB_INDEX_KEY',
+      control: 'CLUB_CONTROL_KEY',
+    },
+    currentWrappingVersion: 'a'.repeat(32),
+    wrappingVersions: [
+      { keyVersion: 'v1', vaultVersion: 'a'.repeat(32) },
+      { keyVersion: 'a'.repeat(32), vaultVersion: 'a'.repeat(32) },
+    ],
+    indexVersion: 'b'.repeat(32),
+    controlVersion: 'c'.repeat(32),
+  };
+  const body = {
+    schemaVersion: 1 as const,
+    bindingRevision: 4,
+    keySets: [k],
+    secrets: [],
+  };
+  const parsed = parseSnapshotRequest({
+    ...body,
+    bindingDigest: bindingDigest(body),
+  });
+  expect(parsed.keySets[0]!.wrappingVersions).toHaveLength(2);
+  const duplicate = {
+    ...body,
+    keySets: [
+      {
+        ...k,
+        wrappingVersions: [k.wrappingVersions[0]!, k.wrappingVersions[0]!],
+      },
+    ],
+  };
+  expect(() => bindingDigest(duplicate)).toThrow();
+});
+it('verified managed-only refresh retains valid prior credentials during a transient broker outage', async () => {
+  const { createApplicationRuntime } =
+    await import('@kick-playr/local-key-vault/runtime-client');
+  const { createHash } = await import('node:crypto');
+  let generation = 1,
+    version = 'a'.repeat(32),
+    fail = false,
+    managedCalls = 0;
+  const selected = { environment: 'development', tenant: 'club' },
+    canonical = (x: any) =>
+      JSON.stringify(x, (_k, v) =>
+        v && typeof v === 'object' && !Array.isArray(v)
+          ? Object.fromEntries(
+              Object.entries(v).sort(([a], [b]) =>
+                a < b ? -1 : a > b ? 1 : 0,
+              ),
+            )
+          : v,
+      );
+  const descriptor = () => {
+    const identity = {
+      schemaVersion: 2,
+      application: 'club-api',
+      scope: selected,
+      resources: [
+        {
+          kind: 'secrets',
+          name: 'credential',
+          mapping: 'RUNTIME_CREDENTIAL_ABCDEF1234567890ABCDEF12',
+          policy: 'latest',
+          version,
+          classification: 'managed-credential',
+          attributes: {
+            enabled: true,
+            created: 1,
+            updated: 1,
+            recoveryLevel: 'Purgeable',
+          },
+        },
+      ],
+    };
+    return {
+      ...identity,
+      generation,
+      digest: createHash('sha256').update(canonical(identity)).digest('hex'),
+    };
+  };
+  const runtime = createApplicationRuntime({
+    application: 'club-api',
+    scope: selected,
+    environment: {
+      NODE_ENV: 'test',
+      SECRETS_KEYS_STRATEGY: 'LOCAL_KEYVAULT',
+      LOCAL_KEYVAULT_AUTH_JSON: JSON.stringify({
+        schemaVersion: 1,
+        grants: [
+          { ...selected, token: 'test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+        ],
+      }),
+    },
+    allowedMappings: ['RUNTIME_CREDENTIAL_ABCDEF1234567890ABCDEF12'],
+    prepare: async () => ({ value: 'OLD' }),
+    prepareManagedCredential: async () => {
+      managedCalls++;
+      if (fail) throw Error('PRIVATE_BROKER_VALUE');
+      return { value: 'NEW' };
+    },
+    fetch: async (input) => {
+      const action = new URL(String(input)).pathname.split('/').at(-1);
+      const d = descriptor();
+      if (action === 'snapshot')
+        return Response.json({
+          ...d,
+          resources: d.resources.map((r) => ({ ...r, value: 'PRIVATE_TOKEN' })),
+        });
+      if (action === 'register')
+        return Response.json({
+          instanceId: 'a'.repeat(36),
+          proof: 'a'.repeat(43),
+          expiresAt: Date.now() + 30000,
+        });
+      if (action === 'acknowledge')
+        return Response.json({ accepted: true, expiresAt: Date.now() + 30000 });
+      if (action === 'in-use') return Response.json({ valid: true });
+      return Response.json(d);
+    },
+  } as any);
+  try {
+    await runtime.start();
+    version = 'b'.repeat(32);
+    generation++;
+    fail = true;
+    await runtime.refresh();
+    expect(managedCalls).toBe(1);
+    expect(await runtime.withValue((v: any) => v)).toBe('OLD');
+    expect(runtime.status().state).toBe('warning');
+    fail = false;
+    await runtime.refresh();
+    expect(await runtime.withValue((v: any) => v)).toBe('NEW');
+    expect(runtime.status().state).toBe('applied');
+  } finally {
+    runtime.close();
+  }
 });

@@ -393,6 +393,23 @@ function createApplicationRuntime(options) {
       )
     );
   }
+  function managedOnly(next) {
+    if (
+      migrationRecoveryRequired ||
+      !migrationBaseline ||
+      typeof options.prepareManagedCredential !== 'function'
+    )
+      return false;
+    const encryption = (descriptor) =>
+      canonical(
+        descriptor.resources
+          .filter((r) => r.classification === 'encryption-key')
+          .map((r) => [r.name, r.mapping, r.version, r.classification]),
+      );
+    return (
+      needsMigration(next) && encryption(migrationBaseline) === encryption(next)
+    );
+  }
   async function report() {
     if (!instance) {
       const r = object(await request('register', {}), [
@@ -498,7 +515,8 @@ function createApplicationRuntime(options) {
           }
           return;
         }
-        const migration = needsMigration(snapshot);
+        const managedRefresh = managedOnly(snapshot);
+        const migration = needsMigration(snapshot) && !managedRefresh;
         if (migration && !options.prepareMigration) {
           state = current ? 'warning' : 'blocked';
           reason = 'MigrationRequired';
@@ -521,7 +539,11 @@ function createApplicationRuntime(options) {
           await drain();
           migrationRecoveryRequired = true;
         }
-        const prepare = migration ? options.prepareMigration : options.prepare;
+        const prepare = migration
+          ? options.prepareMigration
+          : managedRefresh
+            ? options.prepareManagedCredential
+            : options.prepare;
         candidate = await prepare(snapshot, {
           previous: valid(current) ? current.snapshot : undefined,
           previousDescriptor: migrationBaseline,

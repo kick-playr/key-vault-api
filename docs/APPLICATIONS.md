@@ -196,3 +196,10 @@ version. This is necessary when an index/control-only rotation changes the
 active keyset label to a UUID while preserving old envelopes labelled `v1`.
 Alias names remain unique, role separation and immutable-pin checks still apply,
 and aliases never point to different bytes under the same name.
+
+Reviewed managed-credential adapters may provide `prepareManagedCredential` for
+ordinary provider token refresh. It must verify the original immutable broker
+anchor and exact candidate value before returning. This path retains a valid
+old generation during transient verification failure. It cannot bypass a change
+to the encryption tuple or a failed migration recovery fence; those still use
+`prepareMigration` and the durable tenant gate.

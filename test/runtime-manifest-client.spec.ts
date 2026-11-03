@@ -85,3 +85,8 @@ it('keeps failed manifest discovery sticky until a fresh runtime and never falls
     expect(calls).toBe(1);
   } finally { runtime.close(); }
 });
+it('discovers one tenant without fetching unrelated tenant manifests and retries failed selected metadata',async()=>{
+ const f=fixture();const failed=request('BAD_SECRET',3);f.parent.tenants.push({tenant:'unavailable',bindingRevision:3,bindingDigest:failed.bindingDigest});let failOnce=true;
+ const runtime=createSecretsRuntime({environment:f.environment,fetch:async(input,init)=>{if(String(input).endsWith('/2')&&failOnce){return Response.json({error:{code:'Temporary'}},{status:503});}return f.fetch(input,init);}});
+ try{await expect(runtime.loadTenantBinding('club-api','fcrww')).rejects.toThrow();failOnce=false;const loaded=await runtime.loadTenantBinding('club-api','fcrww');expect(loaded.request.bindingRevision).toBe(2);expect(f.calls.some(c=>c.url.endsWith('/3'))).toBe(false);}finally{runtime.close();}
+});

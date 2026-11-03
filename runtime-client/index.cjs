@@ -194,7 +194,7 @@ function createRuntime(options) {
       const result = parseRuntimeManifest(raw);
       check(result.application === application && result.scope.environment === selectedScope.environment && result.scope.tenant === selectedScope.tenant && (revision === undefined || result.request.bindingRevision === revision));
       return freeze(result);
-    }, 131072));
+    }, 131072).catch(error=>{if(revision!==undefined)manifestPromises.delete(id);throw error;}));
     return manifestPromises.get(id);
   }
   async function processBinding(application) {
@@ -222,6 +222,13 @@ function createRuntime(options) {
   async function loadApplication(application) {
     active(); check(strategy === 'LOCAL_KEYVAULT'); return freeze(structuredClone(await processBinding(application)));
   }
+  async function loadTenantBinding(application,tenant){
+    active();check(strategy==='LOCAL_KEYVAULT');await processBinding(application);part(tenant);check(tenant!=='_shared');
+    let selected;
+    if(discovery){const parent=await manifest(application,{environment:manifestEnvironment,tenant:'_shared'});const ref=parent.tenants.find(r=>r.tenant===tenant);check(ref);selected=await tenantBinding(tenant,ref.bindingRevision);}
+    else{selected=bindings.tenants.find(b=>b.scope.tenant===tenant);check(selected);}
+    return freeze(structuredClone(selected));
+  }
   async function loadBindings(application) {
     active(); check(strategy === 'LOCAL_KEYVAULT'); await processBinding(application);
     if (discovery) {
@@ -247,7 +254,7 @@ function createRuntime(options) {
     active(); check(strategy === 'LOCAL_KEYVAULT'); const b = await tenantBinding(tenant, revision); return load(b.scope, b.request);
   }
   function close() { closed = true; for (const c of controllers) c.abort(); controllers.clear(); cache.clear(); pending.clear(); manifestPromises.clear(); bindingPromises.clear(); if (auth) auth.grants.length = 0; }
-  return Object.freeze({ load, loadApplication, loadBindings, loadProcess, loadTenant, close });
+  return Object.freeze({ load, loadApplication, loadTenantBinding, loadBindings, loadProcess, loadTenant, close });
 }
 function abortable(promise, signal) { return new Promise((resolve, reject) => { function abort() { reject(unavailable()); } signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); Promise.resolve(promise).then(resolve, () => reject(unavailable())).finally(() => signal.removeEventListener('abort', abort)); }); }
 function delay(ms, signal) { return new Promise((resolve, reject) => { const timer = setTimeout(done, ms); function done() { signal.removeEventListener('abort', abort); resolve(); } function abort() { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(unavailable()); } signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); }); }

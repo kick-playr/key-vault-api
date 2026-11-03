@@ -477,3 +477,4 @@ it('binds rotation proof digests to the exact three key versions and namespace',
     rotationKeyDigest(plan.scope, plan.from),
   );
 });
+it('accepts an established database identity in the durable plan but rejects malformed dataset metadata',()=>{const{validateRotationPlan}=require('../runtime-client/tenant-rotation.cjs');const dataset={database:'club_data',cluster:'c'.repeat(64)};expect(validateRotationPlan({...plan,dataset}).dataset).toEqual(dataset);expect(()=>validateRotationPlan({...plan,dataset:{database:'admin',cluster:'c'.repeat(64)}})).toThrow();});

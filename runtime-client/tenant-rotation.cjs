@@ -41,6 +41,7 @@ function plan(input) {
     'from',
     'to',
     'wrappingHistory',
+    'dataset',
   ]);
   const s = object(p.scope, ['environment', 'tenant']);
   check(
@@ -92,6 +93,7 @@ function plan(input) {
       );
     }
   }
+  if(p.dataset!==undefined){object(p.dataset,['database','cluster']);check(typeof p.dataset.database==='string'&&/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(p.dataset.database)&&!['admin','config','local'].includes(p.dataset.database.toLowerCase())&&typeof p.dataset.cluster==='string'&&/^[a-f0-9]{64}$/.test(p.dataset.cluster));}
   return freeze(JSON.parse(canonical(p)));
 }
 function rotationKeyDigest(scope, keys) {

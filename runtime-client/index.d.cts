@@ -33,6 +33,7 @@ export interface ProcessSecrets { strategy: Strategy; mappings: Readonly<Record<
 export interface SecretsRuntime {
   load(scope: Scope, request: RuntimeSnapshotRequest): Promise<RuntimeSnapshot>;
   loadApplication(application: string): Promise<{scope: Scope; request: RuntimeSnapshotRequest}>;
+  loadTenantBinding?(application:string,tenant:string):Promise<{scope:Scope;request:RuntimeSnapshotRequest}>;
   loadBindings(application: string): Promise<RuntimeBindings>;
   loadProcess(application: string, policy: ProcessPolicy): Promise<ProcessSecrets>;
   loadTenant(tenant: string, bindingRevision: number): Promise<RuntimeSnapshot>;
@@ -42,7 +43,7 @@ export function selectSecretsStrategy(environment?: Record<string, string | unde
 export function bindingDigest(request: Omit<RuntimeSnapshotRequest, 'bindingDigest'> | RuntimeSnapshotRequest): string;
 export function parseSnapshotRequest(input: unknown): RuntimeSnapshotRequest;
 export function snapshotMappings(snapshot: RuntimeSnapshot): Readonly<Record<string, string>>;
-export function createSecretsRuntime(options: { environment: Record<string, string | undefined>; fetch?: typeof globalThis.fetch; credentialSupplier?: (scope: Readonly<Scope>) => string | Promise<string> }): SecretsRuntime;
+export function createSecretsRuntime(options: { environment: Record<string, string | undefined>; fetch?: typeof globalThis.fetch; credentialSupplier?: (scope: Readonly<Scope>) => string | Promise<string> }): SecretsRuntime & Required<Pick<SecretsRuntime,'loadTenantBinding'>>;
 
 export interface ApplicationResourceDescriptor { kind: 'secrets'; name: string; mapping: string; policy: string; version: string; classification: 'secret' | 'encryption-key' | 'managed-credential'; attributes: Attributes }
 export interface ApplicationDescriptor { schemaVersion: 2; application: string; scope: Scope; generation: number; digest: string; resources: ApplicationResourceDescriptor[] }

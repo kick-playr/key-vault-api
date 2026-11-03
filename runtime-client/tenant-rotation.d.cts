@@ -11,6 +11,7 @@ export type RotationKeys = Record<
 export interface RotationPlan {
   scope: Scope;
   expectedRevision: number;
+  dataset?:{database:string;cluster:string};
   fromDigest: string;
   toDigest: string;
   from: RotationKeys;

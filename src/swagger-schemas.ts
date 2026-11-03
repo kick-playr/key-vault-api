@@ -11,6 +11,7 @@ const entry = {
 };
 const obj = (properties: SchemaObject['properties'], required: string[] = []): SchemaObject => ({ type: 'object', additionalProperties: false, properties, ...(required.length ? { required } : {}) });
 export const schemas: Record<string, SchemaObject> = {
+  ApplicationMode: obj({schemaVersion:{type:'integer',enum:[2]},application:text,scope:obj({environment:text,tenant:text},['environment','tenant']),mode:{type:'string',enum:['legacy','live']}},['schemaVersion','application','scope','mode']),
   ApplicationInUse: obj({valid:{type:'boolean'}},['valid']),
   ApplicationInUseSelector: obj({resources:{type:'array',maxItems:100,items:obj({name:text,version:text},['name','version'])}},['resources']),
   EmptyObject: { type: 'object', additionalProperties: false },

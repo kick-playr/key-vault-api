@@ -13,7 +13,7 @@ export interface OAuthCredential {
 }
 export interface ResourceAssociation { envName: string; memberships: Record<string, string> }
 export interface Namespace {
-  applications?: Record<string, { displayName: string; description: string }>;
+  applications?: Record<string, { displayName: string; description: string; liveEnabled?: boolean }>;
   resourceAssociations?: Record<string, ResourceAssociation>;
   applicationRevision?: number;
   runtimeInstances?: Record<string, RuntimeInstanceRecord>;

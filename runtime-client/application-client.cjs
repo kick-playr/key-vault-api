@@ -175,17 +175,23 @@ function createApplicationRuntime(options) {
       !url.username &&
       !url.password,
   );
-  check(
-    Array.isArray(options.allowedMappings) &&
-      options.allowedMappings.length <= 256 &&
-      new Set(options.allowedMappings).size === options.allowedMappings.length,
-  );
-  options.allowedMappings.forEach(envName);
+  let allowed;
+  if (typeof options.allowedMappings === 'function')
+    allowed = (name) => options.allowedMappings(name) === true;
+  else {
+    check(
+      Array.isArray(options.allowedMappings) &&
+        options.allowedMappings.length <= 256 &&
+        new Set(options.allowedMappings).size ===
+          options.allowedMappings.length,
+    );
+    const policy = [...options.allowedMappings];
+    policy.forEach(envName);
+    allowed = (name) => policy.includes(name);
+  }
   const required = [...(options.requiredMappings ?? [])];
-  check(
-    required.every((n) => options.allowedMappings.includes(n)) &&
-      typeof options.prepare === 'function',
-  );
+  required.forEach(envName);
+  check(required.every(allowed) && typeof options.prepare === 'function');
   const interval = options.intervalMs ?? 1000;
   check(Number.isSafeInteger(interval) && interval >= 250 && interval <= 5000);
   const operationTimeout = options.operationTimeoutMs ?? 30000;
@@ -263,7 +269,7 @@ function createApplicationRuntime(options) {
             '/' +
             action,
           {
-            method: action === 'desired' ? 'GET' : 'POST',
+            method: ['desired', 'mode'].includes(action) ? 'GET' : 'POST',
             headers: {
               Authorization: 'Bearer ' + token,
               'Content-Type': 'application/json',
@@ -359,9 +365,7 @@ function createApplicationRuntime(options) {
   }
   function checkSnapshot(snapshot) {
     check(
-      snapshot.resources.every((r) =>
-        options.allowedMappings.includes(r.mapping),
-      ) &&
+      snapshot.resources.every((r) => allowed(r.mapping)) &&
         required.every((n) => snapshot.resources.some((r) => r.mapping === n)),
     );
     const now = Math.floor(Date.now() / 1000);
@@ -648,6 +652,7 @@ function createApplicationRuntime(options) {
   async function withValue(fn) {
     if (
       closed ||
+      !running ||
       !valid(current) ||
       state === 'blocked' ||
       current.refs >= 1024
@@ -695,7 +700,66 @@ function createApplicationRuntime(options) {
     instance = undefined;
     migrationBaseline = undefined;
   }
+  async function mode() {
+    try {
+      const response = object(await request('mode'), [
+        'schemaVersion',
+        'application',
+        'scope',
+        'mode',
+      ]);
+      check(
+        response.schemaVersion === 2 &&
+          response.application === application &&
+          ['legacy', 'live'].includes(response.mode),
+      );
+      const selected = object(response.scope, ['environment', 'tenant']);
+      check(
+        selected.environment === scope.environment &&
+          selected.tenant === scope.tenant,
+      );
+      return response.mode;
+    } catch (e) {
+      if (e?.kind === 'denied') deny();
+      throw unavailable();
+    }
+  }
+  if (options.initial) {
+    const initial = object(options.initial, ['snapshot', 'prepared']);
+    const snapshot = parseDescriptor(
+      initial.snapshot,
+      scope,
+      application,
+      true,
+    );
+    checkSnapshot(snapshot);
+    check(
+      initial.prepared &&
+        Object.hasOwn(initial.prepared, 'value') &&
+        (initial.prepared.dispose === undefined ||
+          typeof initial.prepared.dispose === 'function'),
+    );
+    current = {
+      snapshot,
+      prepared: initial.prepared,
+      refs: 0,
+      operations: new Set(),
+      waiters: new Set(),
+      expiresAt: Math.min(
+        ...snapshot.resources.map((r) =>
+          r.attributes.exp === undefined ? Infinity : r.attributes.exp * 1000,
+        ),
+      ),
+    };
+    migrationBaseline = freeze({
+      ...snapshot,
+      resources: snapshot.resources.map(({ value, ...r }) => r),
+    });
+    generation = snapshot.generation;
+    expire(current);
+  }
   return Object.freeze({
+    mode,
     start,
     refresh,
     withValue,
@@ -729,6 +793,104 @@ function abortable(promise, signal) {
     );
   });
 }
+function applicationSnapshotFromLegacy(application, input) {
+  const body = object(input, [
+    'schemaVersion',
+    'environment',
+    'tenant',
+    'bindingRevision',
+    'bindingDigest',
+    'generation',
+    'loadedAt',
+    'keySets',
+    'secrets',
+  ]);
+  check(
+    body.schemaVersion === 1 &&
+      body.tenant === '_shared' &&
+      Array.isArray(body.keySets) &&
+      body.keySets.length === 0 &&
+      Array.isArray(body.secrets),
+  );
+  check(
+    Number.isSafeInteger(body.generation) &&
+      body.generation >= 0 &&
+      Number.isSafeInteger(body.loadedAt) &&
+      body.loadedAt > 0,
+  );
+  const selected = { environment: body.environment, tenant: body.tenant };
+  check(['development', 'dev', 'test'].includes(selected.environment));
+  text(application, /^[a-z][a-z0-9-]{0,63}$/);
+  require('./index.cjs').parseSnapshotRequest({
+    schemaVersion: 1,
+    bindingRevision: body.bindingRevision,
+    bindingDigest: body.bindingDigest,
+    keySets: [],
+    secrets: body.secrets.map((s) => ({
+      mapping: s.mapping,
+      purpose: s.purpose,
+      version: s.version,
+    })),
+  });
+  const resources = body.secrets
+    .map((raw) => {
+      const r = object(raw, [
+        'mapping',
+        'purpose',
+        'version',
+        'value',
+        'attributes',
+      ]);
+      const name =
+        'kv-' +
+        createHash('sha256')
+          .update(
+            JSON.stringify([
+              selected.environment,
+              selected.tenant,
+              'secret',
+              r.purpose,
+            ]),
+          )
+          .digest('hex');
+      return {
+        kind: 'secrets',
+        name,
+        mapping: r.mapping,
+        policy: r.version,
+        version: r.version,
+        classification:
+          /(?:WRAPPING_KEY_V[0-9]+|INDEX_KEY|CONTROL_KEY|CREDENTIAL_KEY|ENCRYPTION_KEY)$/.test(
+            r.mapping,
+          )
+            ? 'encryption-key'
+            : 'secret',
+        attributes: { ...r.attributes },
+        value: r.value,
+      };
+    })
+    .sort((a, b) =>
+      a.mapping < b.mapping ? -1 : a.mapping > b.mapping ? 1 : 0,
+    );
+  const identity = {
+    schemaVersion: 2,
+    application,
+    scope: selected,
+    resources: resources.map(({ value, ...r }) => r),
+  };
+  return parseDescriptor(
+    {
+      ...identity,
+      generation: body.generation,
+      digest: digest(identity),
+      resources,
+    },
+    selected,
+    application,
+    true,
+  );
+}
+exports.applicationSnapshotFromLegacy = applicationSnapshotFromLegacy;
 exports.createApplicationRuntime = (options) => {
   try {
     return createApplicationRuntime(options);

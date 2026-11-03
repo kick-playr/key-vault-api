@@ -9,7 +9,7 @@ import type { Attributes, Namespace, Scope } from './types.js';
 import { applicationName } from './applications.js';
 import { fail, requireCondition as check } from './errors.js';
 import { envName, identifier, object, scopePart } from './validation.js';
-import { find } from './vault.js';
+import { find, changed } from './vault.js';
 import { tenantKeySet } from './tenant-key-tree.js';
 
 export type ResourceClassification =
@@ -258,6 +258,38 @@ export class ApplicationRuntimeService {
   constructor(
     private readonly store: Pick<MongoStore, 'read' | 'transaction'>,
   ) {}
+  mode(scope: Scope, application: string) {
+    applicationName(application);
+    if (scope.tenant !== '_shared') fail(400, 'SharedScopeRequired');
+    if (!['development', 'dev', 'test'].includes(scope.environment))
+      fail(403, 'Forbidden');
+    return this.store.read(scope, (ns) => ({
+      schemaVersion: 2 as const,
+      application,
+      scope: { ...scope },
+      mode: has(ns?.applications, application)?.liveEnabled
+        ? ('live' as const)
+        : ('legacy' as const),
+    }));
+  }
+  async activate(scope: Scope, application: string, input: unknown) {
+    applicationName(application);
+    if (scope.tenant !== '_shared') fail(400, 'SharedScopeRequired');
+    const body = object(input, ['expectedRevision']);
+    check(
+      Number.isSafeInteger(body.expectedRevision) &&
+        (body.expectedRevision as number) >= 0,
+    );
+    return this.store.transaction(scope, (ns) => {
+      if (body.expectedRevision !== (ns.applicationRevision ?? 0))
+        fail(409, 'ApplicationRevisionConflict');
+      applicationDescriptor(scope, application, ns);
+      ns.applications![application]!.liveEnabled = true;
+      ns.applicationRevision = (ns.applicationRevision ?? 0) + 1;
+      changed(ns, 'application.activate', application);
+      return { activated: true };
+    });
+  }
   desired(scope: Scope, application: string) {
     return this.store.read(scope, (ns) =>
       applicationDescriptor(scope, application, ns),
@@ -338,7 +370,17 @@ export class ApplicationRuntimeService {
     const instanceId = randomUUID(),
       proof = randomBytes(32).toString('base64url');
     return this.store.transaction(scope, (ns) => {
-      applicationDescriptor(scope, application, ns);
+      applicationName(application);
+      if (!has(sharedMappings, application))
+        fail(409, 'UnsupportedApplicationContract');
+      if (
+        scope.tenant === '_shared'
+          ? !has(ns.applications, application)
+          : !Object.values(ns.resourceAssociations ?? {}).some((r) =>
+              has(r.memberships, application),
+            )
+      )
+        fail(404, 'ApplicationNotFound');
       const now = Date.now(),
         records = (ns.runtimeInstances ??= {});
       for (const [id, r] of Object.entries(records))

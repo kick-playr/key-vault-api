@@ -121,3 +121,23 @@ published/pinned package contracts. Merely changing process.env is insufficient.
 APP-43's global durable migration and recovery remain unfinished. The scoped
 runtime unit/integration tests are evidence for the protocol/controller, not proof
 that these existing applications already refresh automatically.
+
+## Explicit consumer migration
+
+Creating/editing the model does not activate it. In the shared Application page,
+**Use live configuration → Activate live configuration** validates the shared
+links and sets a sticky server-side live-mode flag. The operator needs the same
+shared namespace list/write authority and a current metadata revision. Editing
+labels cannot reset activation. There is no ordinary downgrade button: returning
+to old startup pointers could bypass completed key migrations.
+
+Updated consumers read `GET /local/application-runtime/:application/mode` with
+shared read authority. This adds no bootstrap environment variable. Before UI
+activation they retain their legacy startup policy; afterwards they use the v2
+controller. The client exposes `mode()` and supports seeding an already validated
+process snapshot/prepared value, so invalid candidates retain working values and
+key changes still require migration during this handover. The conversion helper
+`applicationSnapshotFromLegacy` accepts process snapshots only, validates pins and
+derives the existing deterministic resource names; tenant key sets need their own
+explicit adapter. Dynamic realm mappings use a code-owned finite predicate, never
+an operator-provided executable expression or arbitrary ENV injection.

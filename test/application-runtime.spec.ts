@@ -272,6 +272,9 @@ async function clientFixture(options: Record<string, unknown> = {}) {
   const { createApplicationRuntime } =
     await import('@kick-playr/local-key-vault/runtime-client');
   const f = fixture();
+  const config = { ...options };
+  if (typeof config.initial === 'function')
+    config.initial = await config.initial(f);
   let httpStatus = 200;
   const calls: string[] = [];
   const disposed: string[] = [];
@@ -286,15 +289,17 @@ async function clientFixture(options: Record<string, unknown> = {}) {
     try {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       const result =
-        action === 'in-use'
-          ? await f.service.inUse(scope, 'app', body)
-          : action === 'desired'
-            ? await f.service.desired(scope, 'app')
-            : action === 'snapshot'
-              ? await f.service.snapshot(scope, 'app', body)
-              : action === 'register'
-                ? await f.service.register(scope, 'app', 'caller')
-                : await f.service.acknowledge(scope, 'app', 'caller', body);
+        action === 'mode'
+          ? await f.service.mode(scope, 'app')
+          : action === 'in-use'
+            ? await f.service.inUse(scope, 'app', body)
+            : action === 'desired'
+              ? await f.service.desired(scope, 'app')
+              : action === 'snapshot'
+                ? await f.service.snapshot(scope, 'app', body)
+                : action === 'register'
+                  ? await f.service.register(scope, 'app', 'caller')
+                  : await f.service.acknowledge(scope, 'app', 'caller', body);
       return Response.json(result);
     } catch (e: any) {
       return Response.json(
@@ -326,7 +331,7 @@ async function clientFixture(options: Record<string, unknown> = {}) {
         },
       };
     },
-    ...options,
+    ...config,
   });
   return {
     ...f,
@@ -788,8 +793,133 @@ it('bounds startup even when a transport ignores its abort signal', async () => 
     jest.useRealTimers();
   }
 });
-it('exposes the new runtime through native Node ESM named imports as well as require',async()=>{
-  const {execFileSync}=await import('node:child_process');
-  const script="import { createApplicationRuntime, parseApplicationDescriptor } from '@kick-playr/local-key-vault/runtime-client'; console.log(typeof createApplicationRuntime, typeof parseApplicationDescriptor)";
-  expect(execFileSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim()).toBe('function function');
+it('exposes the new runtime through native Node ESM named imports as well as require', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const script =
+    "import { createApplicationRuntime, parseApplicationDescriptor } from '@kick-playr/local-key-vault/runtime-client'; console.log(typeof createApplicationRuntime, typeof parseApplicationDescriptor)";
+  expect(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim(),
+  ).toBe('function function');
+});
+it('switches an application to live mode only through explicit shared-scope activation and never downgrades on label edits', async () => {
+  const { ApplicationsService } = await import('../src/applications.js');
+  const f = fixture();
+  expect(await f.service.mode(scope, 'app')).toMatchObject({ mode: 'legacy' });
+  await expect(
+    f.service.activate({ ...scope, tenant: 'club' }, 'app', {
+      expectedRevision: 0,
+    }),
+  ).rejects.toThrow('SharedScopeRequired');
+  await f.service.activate(scope, 'app', { expectedRevision: 0 });
+  expect(await f.service.mode(scope, 'app')).toMatchObject({ mode: 'live' });
+  const store = {
+    read: async (_s: Scope, fn: any) => fn(f.ns()),
+    transaction: async (_s: Scope, fn: any) => fn(f.ns()),
+  };
+  await new ApplicationsService(store as any).save(scope, 'app', {
+    expectedRevision: 1,
+    displayName: 'Renamed',
+    description: '',
+  });
+  expect(await f.service.mode(scope, 'app')).toMatchObject({ mode: 'live' });
+});
+it('retains a seeded startup generation when the newest candidate is invalid', async () => {
+  const f = await clientFixture({
+    initial: async (base: any) => {
+      const d = await base.service.desired(scope, 'app');
+      const snapshot = await base.service.snapshot(scope, 'app', {
+        generation: d.generation,
+        digest: d.digest,
+      });
+      base
+        .ns()
+        .secrets['arbitrary-database-name'].push(
+          newSecret({ value: 'BAD', attributes: { enabled: false } }),
+        );
+      base.ns().generation++;
+      return {
+        snapshot: JSON.parse(JSON.stringify(snapshot)),
+        prepared: { value: 'STARTUP_VALUE' },
+      };
+    },
+  });
+  await f.runtime.start();
+  expect(await f.runtime.withValue((v) => v)).toBe('STARTUP_VALUE');
+  expect(f.runtime.status().state).toBe('warning');
+  f.runtime.close();
+});
+it('reads explicit migration mode without loading secret values', async () => {
+  const f = await clientFixture();
+  expect(await f.runtime.mode()).toBe('legacy');
+  await f.service.activate(scope, 'app', { expectedRevision: 0 });
+  expect(await f.runtime.mode()).toBe('live');
+  expect(f.calls).not.toContain('snapshot');
+  f.runtime.close();
+});
+it('supports a code-owned finite mapping predicate for registered realm credential names', async () => {
+  const f = await clientFixture({
+    allowedMappings: (name: string) => name === 'DATABASE_URL',
+  });
+  await f.runtime.start();
+  expect(await f.runtime.withValue((v) => v)).toBe('FIRST_CANARY');
+  f.runtime.close();
+});
+it('converts legacy process pins into an immutable migration baseline and blocks a changed initial encryption key', async () => {
+  const { applicationSnapshotFromLegacy, bindingDigest } =
+    await import('@kick-playr/local-key-vault/runtime-client');
+  const { vaultName } = await import('../src/manifest.js');
+  const f = await clientFixture({
+    requiredMappings: ['CLERK_ENCRYPTION_KEY'],
+    initial: async (base: any) => {
+      const name = vaultName(scope, 'secret', 'request-encryption');
+      const item = newSecret({ value: 'LEGACY_KEY' });
+      base.ns().secrets = { [name]: [item] };
+      base.ns().resourceAssociations = {
+        ['secrets/' + name]: {
+          envName: 'CLERK_ENCRYPTION_KEY',
+          memberships: { app: 'latest' },
+        },
+      };
+      const body = {
+        schemaVersion: 1 as const,
+        bindingRevision: 1,
+        keySets: [],
+        secrets: [
+          {
+            mapping: 'CLERK_ENCRYPTION_KEY',
+            purpose: 'request-encryption',
+            version: item.version,
+          },
+        ],
+      };
+      const legacy = {
+        ...body,
+        bindingDigest: bindingDigest(body),
+        ...scope,
+        generation: 1,
+        loadedAt: Date.now(),
+        secrets: [
+          {
+            ...body.secrets[0]!,
+            value: 'LEGACY_KEY',
+            attributes: item.attributes,
+          },
+        ],
+      };
+      const snapshot = applicationSnapshotFromLegacy('app', legacy);
+      expect(snapshot.resources[0]!.name).toBe(name);
+      expect(snapshot.resources[0]!.classification).toBe('encryption-key');
+      expect(Object.isFrozen(snapshot.resources[0]!)).toBe(true);
+      base.ns().secrets[name].push(newSecret({ value: 'CHANGED_KEY' }));
+      base.ns().generation++;
+      return { snapshot, prepared: { value: 'LEGACY_KEY' } };
+    },
+  });
+  await f.runtime.start();
+  expect(await f.runtime.withValue((v) => v)).toBe('LEGACY_KEY');
+  expect(f.runtime.status().reason).toBe('MigrationRequired');
+  f.runtime.close();
 });

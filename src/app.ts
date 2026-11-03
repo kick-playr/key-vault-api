@@ -89,6 +89,12 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Inventory', 'Search combined key and secret metadata within one namespace', 'list', 'Inventory', undefined, true)
     @InventoryQueries(true) @Get('local/inventory') @Permissions('list')
     search(@Req() req: ScopedRequest, @Query() query: unknown) { return inventory.list(req.vaultScope, 'local/inventory', query); }
+    @VaultEndpoint('Runtime', 'Read explicit UI migration mode without changing legacy consumers', 'read', 'ApplicationMode', undefined, true)
+    @Get('local/application-runtime/:application/mode') @Permissions('read')
+    applicationMode(@Req() req: ScopedRequest, @Param('application') application: string) { return applicationRuntime.mode(req.vaultScope,application); }
+    @VaultEndpoint('Applications', 'Activate live configuration after validating shared links; no silent downgrade', 'write and list', 'Applications', 'ApplicationRevision', true)
+    @Put('local/applications/:application/activate') @Permissions('write','list')
+    async applicationActivate(@Req() req: ScopedRequest, @Param('application') application: string, @Body() body: unknown) { await applicationRuntime.activate(req.vaultScope,application,body); return applications.list(req.vaultScope); }
     @VaultEndpoint('Runtime', 'Resolve current application links to exact versions; metadata only', 'read', 'ApplicationDescriptor', undefined, true)
     @Get('local/application-runtime/:application/desired') @Permissions('read')
     applicationDesired(@Req() req: ScopedRequest, @Param('application') application: string) { return applicationRuntime.desired(req.vaultScope,application); }

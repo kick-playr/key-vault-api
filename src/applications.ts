@@ -26,7 +26,7 @@ export interface ApplicationResource {
   kind: Kind; name: string; envName: string; policy: string; version?: string;
   enabled: boolean; missing: boolean; tags: Record<string, string>; applications: string[];
 }
-export interface ApplicationView { name: string; displayName: string; description: string; supported: boolean; resources: ApplicationResource[]; runtimeStatus: 'not-connected' }
+export interface ApplicationView { name: string; displayName: string; description: string; supported: boolean; resources: ApplicationResource[]; liveEnabled: boolean; runtimeStatus: 'not-connected' }
 export interface ApplicationsView { revision: number; generation: number; environment: string; tenant: string; applications: ApplicationView[] }
 
 /** Metadata only. No value, private key or grant material is returned. */
@@ -47,7 +47,7 @@ export class ApplicationsService {
           ...(item ? { version: item.version } : {}), enabled: item?.attributes.enabled ?? false,
           missing: !item, tags: { ...item?.tags }, applications: Object.keys(association.memberships).sort() }];
       });
-      return [{ name, ...app, supported: SUPPORTED.has(name), resources, runtimeStatus: 'not-connected' as const }];
+      return [{ name, ...app, liveEnabled: app.liveEnabled ?? false, supported: SUPPORTED.has(name), resources, runtimeStatus: 'not-connected' as const }];
     });
     return { revision: ns?.applicationRevision ?? 0, generation: ns?.generation ?? 0, ...scope, applications };
   }
@@ -65,7 +65,7 @@ export class ApplicationsService {
       const description = text(body.description ?? '', 512);
       const applications = ns.applications ??= {};
       if (!Object.hasOwn(applications, name) && Object.keys(applications).length >= 100) fail(409, 'ApplicationLimit');
-      applications[name] = { displayName, description };
+      applications[name] = { displayName, description, ...(has(applications,name)?.liveEnabled ? {liveEnabled:true}: {}) };
       ns.applicationRevision = (ns.applicationRevision ?? 0) + 1;
       changed(ns, 'application.save', name);
       return this.project(scope, ns, applications);

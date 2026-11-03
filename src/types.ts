@@ -14,6 +14,11 @@ export interface OAuthCredential {
 }
 export interface ResourceAssociation { envName: string; memberships: Record<string, string> }
 export interface Namespace {
+  runtimeTenantPublications?:Record<string,string>;
+  runtimePublicationReservation?:string;
+  runtimeLinkPublications?:Record<string,{baseGeneration:number;applicationRevision:number;associations:Record<string,ResourceAssociation>}>;
+  runtimeIdentities?: Record<string,import('./runtime-identity.js').RuntimeIdentity>;
+  runtimeConfiguration?: import('./runtime-configuration.js').RuntimeConfigurationRecord;
   internalScope?: Scope;
   deletedApplications?: string[];
   applicationReservations?: Record<string,Record<string,boolean>>;

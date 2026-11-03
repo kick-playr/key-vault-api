@@ -1,3 +1,4 @@
+import {materializeRuntimeLinks} from './runtime-configuration-links.js';
 import { classifySecretVersions } from './secret-value-format.js';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Collection, Db, MongoClient, MongoServerError } from 'mongodb';
@@ -90,15 +91,19 @@ export class MongoStore {
     try { return await collection.findOne({ _id: id }); } catch { fail(503, 'StoreUnavailable'); }
   }
   async read<T>(scope: Scope, fn: (namespace: Namespace | undefined) => T): Promise<T> {
+    const root = scope.tenant!=='_shared'?await this.fetch(this.id({environment:scope.environment,tenant:'_shared'})):undefined;
+    const publicationId=root?((this.decode(root) as Namespace).runtimeTenantPublications?.[scope.tenant]??(this.decode(root) as Namespace).runtimeConfiguration?.publicationId):undefined;
     const envelope = await this.fetch(this.id(scope));
-    const ns = envelope ? this.decode(envelope) as Namespace : undefined;
+    let ns = envelope ? this.decode(envelope) as Namespace : undefined;
+    if(scope.tenant!=='_shared')ns=materializeRuntimeLinks(ns,publicationId);
     return structuredClone(fn(ns));
   }
-  transaction<T>(scope: Scope, fn: (namespace: Namespace) => T | Promise<T>): Promise<T> {
+  transaction<T>(scope: Scope, fn: (namespace: Namespace) => T | Promise<T>, options?:{runtimePublicationId:string}): Promise<T> {
     const holds=new Set<string>(),operation=randomBytes(16).toString('hex');
     const shared={environment:scope.environment,tenant:'_shared'};
     let settled=false;
     return this.transactionDocument(this.collection,this.id(scope),emptyNamespace,async ns=>{
+      if(scope.tenant!=='_shared'){const root=await this.fetch(this.id(shared));const pub=root?((this.decode(root) as Namespace).runtimeTenantPublications?.[scope.tenant]??(this.decode(root) as Namespace).runtimeConfiguration?.publicationId):undefined;if(ns.runtimePublicationReservation&&ns.runtimePublicationReservation!==pub&&ns.runtimePublicationReservation!==options?.runtimePublicationId)fail(409,'RuntimePublicationPending');materializeRuntimeLinks(ns,pub);}
       ns.internalScope={...scope};
       const priorInstances=structuredClone(ns.runtimeInstances??{});
       const prior=new Set(this.references(ns));

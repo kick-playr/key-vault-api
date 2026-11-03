@@ -1,3 +1,5 @@
+import {RuntimeIdentityService} from './runtime-identity.js';
+import {RuntimeConfigurationService,parseTenantTokens} from './runtime-configuration.js';
 import 'reflect-metadata';
 import { createHash } from 'node:crypto';
 import { ApplicationRuntimeService } from './application-runtime.js';
@@ -14,7 +16,7 @@ import { VaultService } from './vault.js';
 import { ProvisioningService } from './provisioning.js';
 import { RuntimeManifestService } from './runtime-manifests.js';
 import { RuntimeSnapshotService } from './runtime-snapshot.js';
-import { ApiBearerAuth, ApiHeaders } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiHeaders, ApiTags } from '@nestjs/swagger';
 import { InventoryQueries, isDocumentationRequest, setupSwagger, VaultEndpoint } from './swagger.js';
 import { TenantKeyTreeService } from './tenant-key-tree.js';
 import { InventoryService } from './inventory.js';
@@ -45,6 +47,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const config = validateConfig(input);
   const store = await MongoStore.open(config);
   const grants = new GrantService(store);
+  const runtimeIdentities = new RuntimeIdentityService(store);
   const audit = new AuditService(auditDestinations(config.audit), store);
   const vault = new VaultService(store, config.baseUrl.replace(/\/$/, ''));
   const provisioning = new ProvisioningService(vault);
@@ -53,6 +56,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
   const runtimeSnapshots = new RuntimeSnapshotService(vault);
   const keyTree = new TenantKeyTreeService(vault);
   const applications = new ApplicationsService(store);
+  const runtimeConfiguration = new RuntimeConfigurationService(store);
   const applicationRuntime = new ApplicationRuntimeService(store);
   const runtimeCaller = (req: ScopedRequest) => createHash('sha256').update(JSON.stringify([...(req.vaultGrantIds ?? [])].sort())).digest('hex');
   const inventory = new InventoryService(vault, config.masterKey);
@@ -113,6 +117,29 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Applications', 'Inspect reported adoption without instance proofs or values', 'list', 'ApplicationRuntimeStatus', undefined, true)
     @Get('local/applications/:application/status') @Permissions('list')
     applicationRuntimeStatus(@Req() req: ScopedRequest, @Param('application') application: string) { return applicationRuntime.status(req.vaultScope,application); }
+    @VaultEndpoint('Applications', 'Read environment runtime configuration', 'scoped configuration permissions', 'RuntimeConfiguration', undefined, true)
+    @Get('local/runtime-configuration') @Permissions('read','list')
+    configuration(@Req() req:ScopedRequest){return runtimeConfiguration.get(req.vaultScope);}
+    @VaultEndpoint('Applications', 'Validate and save complete environment runtime configuration', 'scoped configuration permissions', 'RuntimeConfiguration', 'RuntimeConfigurationSave', true)
+    @Put('local/runtime-configuration') @Permissions('write','list')
+    saveConfiguration(@Req() req:ScopedRequest,@Body() body:unknown){const tokens=parseTenantTokens(req.headers['x-vault-tenant-tokens']);return runtimeConfiguration.save(req.vaultScope,body,scope=>grants.authorize(tokens[scope.tenant]?'Bearer '+tokens[scope.tenant]:req.headers.authorization,scope,['read','write','list']));}
+    @VaultEndpoint('Applications','Validate metadata-only configuration import without writing','read and list','RuntimeConfiguration','RuntimeConfigurationDocument',true)
+    @Post('local/runtime-configuration/import') @HttpCode(200) @Permissions('read','list')
+    importConfiguration(@Req() req:ScopedRequest,@Body() body:unknown){const tokens=parseTenantTokens(req.headers['x-vault-tenant-tokens']);return runtimeConfiguration.import(req.vaultScope,body,scope=>grants.authorize(tokens[scope.tenant]?'Bearer '+tokens[scope.tenant]:req.headers.authorization,scope,['read','list']));}
+    @VaultEndpoint('Applications','Read tenant binding metadata using its scoped grant','read and list','RuntimeConfigurationTenant',undefined,true)
+    @Get('local/runtime-configuration/tenants/:tenant') @Permissions('read','list')
+    configurationTenant(@Req() req:ScopedRequest,@Param('tenant') tenant:string){if(req.vaultScope.tenant!==tenant)fail(403,'Forbidden');return runtimeConfiguration.tenant(req.vaultScope);}
+    @VaultEndpoint('Applications','Check separately administered runtime access for an explicit tenant','shared and tenant read/list','RuntimeAccessStatus',undefined,true)
+    @Get('local/runtime-access-control/:application/tenants/:tenant') @Permissions('read','list')
+    async runtimeAccessStatus(@Req() req:ScopedRequest,@Param('application') application:string,@Param('tenant') tenant:string){if(req.vaultScope.tenant!=='_shared')fail(403,'Forbidden');const tokens=parseTenantTokens(req.headers['x-vault-tenant-tokens']);await grants.authorize(tokens[tenant]?'Bearer '+tokens[tenant]:req.headers.authorization,{environment:req.vaultScope.environment,tenant:scopePart(tenant)},['read','list']);return runtimeIdentities.status(req.vaultScope.environment,application,tenant);}
+    @VaultEndpoint('Applications','Explicitly allow or revoke application access, independently of binding links','shared and tenant read/write/list','RuntimeAccessStatus','RuntimeAccessChange',true)
+    @Put('local/runtime-access-control/:application/tenants/:tenant') @Permissions('read','write','list')
+    async runtimeAccessChange(@Req() req:ScopedRequest,@Param('application') application:string,@Param('tenant') tenant:string,@Body() input:unknown){
+      if(req.vaultScope.tenant!=='_shared')fail(403,'Forbidden');
+      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['allow','oauth'].includes(k))||typeof(input as {allow?:unknown}).allow!=='boolean'||('oauth'in input&&typeof input.oauth!=='boolean'))fail(400,'BadParameter');
+      const body=input as{allow:boolean;oauth?:boolean};const tokens=parseTenantTokens(req.headers['x-vault-tenant-tokens']);await grants.authorize(tokens[tenant]?'Bearer '+tokens[tenant]:req.headers.authorization,{environment:req.vaultScope.environment,tenant:scopePart(tenant)},body.oauth?['read','write','list','renew']:['read','write','list']);
+      return runtimeIdentities.allowTenant(req.vaultScope.environment,application,tenant,body.allow,body.oauth);
+    }
     @VaultEndpoint('Applications', 'List application models and linked resource metadata in this namespace', 'list', 'Applications', undefined, true)
     @Get('local/applications') @Permissions('list')
     applicationsList(@Req() req: ScopedRequest) { return applications.list(req.vaultScope); }
@@ -203,7 +230,37 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @VaultEndpoint('Cryptography', 'Decrypt with an explicit RSA key version', 'crypto', 'CryptoResult', 'CryptoInput')
     @Post('keys/:name/:version/decrypt') @HttpCode(200) @Permissions('crypto') decrypt(@Req() req: ScopedRequest, @Param('name') name: string, @Param('version') version: string, @Body() body: unknown) { return vault.crypto(req.vaultScope, name, version, 'decrypt', body); }
   }
-  @Module({ controllers: [VaultController], providers: [{ provide: 'STORE_LIFECYCLE', useValue: { onModuleDestroy: async () => { await audit.close(); await store.close(); } } }] })
+  @Controller('local/runtime-access/:application')
+  @ApiTags('Runtime')
+  @ApiBearerAuth('bearer')
+  class RuntimeAccessController {
+    private target(application:string,target:string){if(application!==target)fail(403,'Forbidden');}
+    @Get(['runtime-manifests/:target','runtime-manifests/:target/:revision'])
+    manifest(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string,@Param('revision') revision?:string){this.target(application,target);return runtimeManifests.get(req.vaultScope,application,revision);}
+    @Post('oauth-credentials/:action') @HttpCode(200)
+    async oauth(@Req() req:ScopedRequest,@Param('application') application:string,@Param('action') action:string,@Body() body:unknown){
+      if(!['read','enroll','begin','commit'].includes(action))fail(404,'NotFound');await runtimeIdentities.authorizeOAuth(req.headers.authorization,req.vaultScope,application,action!=='read');
+      if(action==='read')return oauthCredentials.read(req.vaultScope,body);if(action==='enroll')return oauthCredentials.enroll(req.vaultScope,body);if(action==='begin')return oauthCredentials.begin(req.vaultScope,body);return oauthCredentials.commit(req.vaultScope,body);
+    }
+    @Post('runtime-snapshot') @HttpCode(200)
+    async snapshot(@Req() req:ScopedRequest,@Param('application') application:string,@Body() body:unknown){
+      if(!body||typeof body!=='object'||!Number.isSafeInteger((body as {bindingRevision?:unknown}).bindingRevision))fail(400,'BadParameter');
+      const selector=body as {bindingRevision:number;bindingDigest:unknown};const published=await runtimeManifests.get(req.vaultScope,application,String(selector.bindingRevision));if(selector.bindingDigest!==published.request.bindingDigest)fail(403,'Forbidden');return runtimeSnapshots.snapshot(req.vaultScope,body);
+    }
+    @Get('application-runtime/:target/mode')
+    mode(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string){this.target(application,target);return applicationRuntime.mode(req.vaultScope,application);}
+    @Get('application-runtime/:target/desired')
+    desired(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string){this.target(application,target);return applicationRuntime.desired(req.vaultScope,application);}
+    @Post('application-runtime/:target/snapshot') @HttpCode(200)
+    values(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string,@Body() body:unknown){this.target(application,target);return applicationRuntime.snapshot(req.vaultScope,application,body);}
+    @Post('application-runtime/:target/in-use') @HttpCode(200)
+    inUse(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string,@Body() body:unknown){this.target(application,target);return applicationRuntime.inUse(req.vaultScope,application,body);}
+    @Post('application-runtime/:target/register') @HttpCode(200)
+    register(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string,@Body() body:unknown){this.target(application,target);if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length)fail(400,'BadParameter');return applicationRuntime.register(req.vaultScope,application,runtimeCaller(req));}
+    @Post('application-runtime/:target/acknowledge') @HttpCode(200)
+    acknowledge(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string,@Body() body:unknown){this.target(application,target);return applicationRuntime.acknowledge(req.vaultScope,application,runtimeCaller(req),body);}
+  }
+  @Module({ controllers: [VaultController,RuntimeAccessController], providers: [{ provide: 'STORE_LIFECYCLE', useValue: { onModuleDestroy: async () => { await audit.close(); await store.close(); } } }] })
   class VaultModule {}
   try {
     const app = await NestFactory.create(VaultModule, { logger: false, bodyParser: false, abortOnError: false });
@@ -221,8 +278,9 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
         req.vaultScope = scope;
         if (match && (match[1] !== scope.environment || match[2] !== scope.tenant)) fail(403, 'Forbidden');
         const path = match ? match[3]! : req.path;
-        const authorized = await grants.authenticatedGrants(req.headers.authorization, scope);
-        req.vaultGrantIds = authorized.map(grant => grant.id);
+        const runtimeIdentity=req.path.match(/^\/local\/runtime-access\/([a-z][a-z0-9-]{0,63})(?:\/|$)/);
+        if(runtimeIdentity)req.vaultGrantIds=[await runtimeIdentities.authorize(req.headers.authorization,scope,runtimeIdentity[1]!)];
+        else {const authorized = await grants.authenticatedGrants(req.headers.authorization, scope);req.vaultGrantIds = authorized.map(grant => grant.id);}
         req.vaultScope = scope;
         if (!/^\/local\//i.test(path) && req.query['api-version'] !== '2025-07-01') fail(400, 'BadParameter');
         req.vaultScope = scope; next();

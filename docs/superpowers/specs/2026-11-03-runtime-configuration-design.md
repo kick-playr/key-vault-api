@@ -1,6 +1,6 @@
 # Runtime configuration: applications and tenants
 
-Status: proposed implementation design, based on the user's approved four-step UI flow. Product name: Runtime configuration.
+Status: approved by user on 2026-11-03. ID: development. Display names: Club API, Club APP, Explorer APP, Explorer API. Tenants and bindings included, with hot tenant enrollment. Product name: Runtime configuration.
 
 ## Intent
 

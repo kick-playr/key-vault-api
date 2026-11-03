@@ -1234,7 +1234,7 @@ it('verified managed-only refresh retains valid prior credentials during a trans
       if (fail) throw Error('PRIVATE_BROKER_VALUE');
       return { value: 'NEW' };
     },
-    fetch: async (input) => {
+    fetch: async (input: string | URL | Request) => {
       const action = new URL(String(input)).pathname.split('/').at(-1);
       const d = descriptor();
       if (action === 'snapshot')

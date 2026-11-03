@@ -63,3 +63,8 @@ export function applicationSnapshotFromLegacy(application: string, snapshot: Run
 
 /** Metadata-only legacy pins for migration comparison; never a serving generation. */
 export function applicationDescriptorFromLegacy(application: string, scope: Scope, request: RuntimeSnapshotRequest): ApplicationDescriptor;
+
+export function applicationDescriptorFromTenantLegacy(application:string,scope:Scope,request:RuntimeSnapshotRequest):ApplicationDescriptor;
+export function applicationSnapshotFromTenantLegacy(application:string,snapshot:RuntimeSnapshot):ApplicationSnapshot;
+
+export * from './tenant-rotation.cjs';

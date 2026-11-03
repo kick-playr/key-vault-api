@@ -1,6 +1,6 @@
 {
   "name": "@kick-playr/local-key-vault",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "NestJS local development vault with an explicit Azure Key Vault REST subset",
   "engines": {
@@ -52,6 +52,11 @@
       "types": "./runtime-client/index.d.cts",
       "require": "./runtime-client/index.cjs",
       "import": "./runtime-client/index.cjs"
+    },
+    "./runtime-client/tenant-rotation": {
+      "types": "./runtime-client/tenant-rotation.d.cts",
+      "require": "./runtime-client/tenant-rotation.cjs",
+      "import": "./runtime-client/tenant-rotation.cjs"
     }
   },
   "typesVersions": {

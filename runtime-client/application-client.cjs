@@ -869,7 +869,7 @@ function applicationSnapshotFromLegacy(application, input) {
         policy: r.version,
         version: r.version,
         classification:
-          /(?:WRAPPING_KEY_V[0-9]+|INDEX_KEY|CONTROL_KEY|CREDENTIAL_KEY|ENCRYPTION_KEY)$/.test(
+          /(?:WRAPPING_KEY_V[0-9]+|INDEX_KEY|CONTROL_KEY|CREDENTIAL_KEY|ENCRYPTION_KEY|MANAGER_INVITATION_FLOW_KEY)$/.test(
             r.mapping,
           )
             ? 'encryption-key'
@@ -936,3 +936,156 @@ function applicationDescriptorFromLegacy(application, scope, input) {
   });
 }
 exports.applicationDescriptorFromLegacy = applicationDescriptorFromLegacy;
+
+function tenantLegacy(application, selected, request, snapshot) {
+  check(['club-api', 'explorer-api'].includes(application));
+  check(
+    selected &&
+      ['development', 'dev', 'test'].includes(selected.environment) &&
+      typeof selected.tenant === 'string' &&
+      /^[A-Za-z0-9_-]{1,64}$/.test(selected.tenant) &&
+      selected.tenant !== '_shared',
+  );
+  request = require('./index.cjs').parseSnapshotRequest(request);
+  const neutral = {
+    enabled: true,
+    created: 0,
+    updated: 0,
+    recoveryLevel: 'Purgeable',
+  };
+  const name = (kind, purpose) =>
+    'kv-' +
+    createHash('sha256')
+      .update(
+        JSON.stringify([selected.environment, selected.tenant, kind, purpose]),
+      )
+      .digest('hex');
+  const resources = request.secrets.map((secret) => {
+    const value = snapshot?.secrets.find(
+      (s) =>
+        s.mapping === secret.mapping &&
+        s.purpose === secret.purpose &&
+        s.version === secret.version,
+    );
+    check(!snapshot || value);
+    return {
+      kind: 'secrets',
+      name: name('secret', secret.purpose),
+      mapping: secret.mapping,
+      policy: secret.version,
+      version: secret.version,
+      classification:
+        application === 'club-api' &&
+        /^RUNTIME_CREDENTIAL_[A-Z0-9_]{1,100}$/.test(secret.mapping)
+          ? 'managed-credential'
+          : 'secret',
+      attributes: value?.attributes ?? neutral,
+      ...(snapshot ? { value: value.value } : {}),
+    };
+  });
+  for (const set of request.keySets) {
+    const match = /^([a-z0-9]+(?:-[a-z0-9]+)*):([^:]+):key$/.exec(
+      set.reference,
+    );
+    check(match && match[1].length <= 48 && match[2] === selected.tenant);
+    const actual = snapshot?.keySets.find((k) => k.reference === set.reference);
+    check(!snapshot || actual);
+    const wrap = set.wrappingVersions.find(
+      (w) => w.keyVersion === set.currentWrappingVersion,
+    );
+    check(wrap);
+    for (const role of ['wrapping', 'index', 'control']) {
+      const path = role === 'wrapping' ? 'wrapping/v1' : role;
+      const version =
+        role === 'wrapping'
+          ? wrap.vaultVersion
+          : role === 'index'
+            ? set.indexVersion
+            : set.controlVersion;
+      const value =
+        role === 'wrapping'
+          ? actual?.wrappingVersions.find(
+              (w) =>
+                w.keyVersion === set.currentWrappingVersion &&
+                w.vaultVersion === version,
+            )
+          : actual?.[role];
+      check(!snapshot || (value && value.vaultVersion === version));
+      resources.push({
+        kind: 'secrets',
+        name:
+          `tk-${role}-` +
+          createHash('sha256')
+            .update(
+              JSON.stringify([
+                selected.environment,
+                selected.tenant,
+                set.reference,
+                path,
+              ]),
+            )
+            .digest('hex'),
+        mapping: set.mappings[role],
+        policy: version,
+        version,
+        classification: 'encryption-key',
+        attributes: value?.attributes ?? neutral,
+        ...(snapshot ? { value: value.value } : {}),
+      });
+    }
+  }
+  resources.sort((a, b) =>
+    a.mapping < b.mapping ? -1 : a.mapping > b.mapping ? 1 : 0,
+  );
+  const identity = {
+    schemaVersion: 2,
+    application,
+    scope: { ...selected },
+    resources: resources.map(({ value, ...r }) => r),
+  };
+  const descriptor = {
+    ...identity,
+    generation: snapshot?.generation ?? 0,
+    digest: digest(identity),
+    resources,
+  };
+  return parseDescriptor(descriptor, selected, application, !!snapshot);
+}
+function applicationDescriptorFromTenantLegacy(application, scope, request) {
+  return tenantLegacy(application, scope, request);
+}
+function applicationSnapshotFromTenantLegacy(application, input) {
+  check(input?.schemaVersion === 1);
+  const keySets = input.keySets.map((k) => ({
+    reference: k.reference,
+    mappings: k.mappings,
+    currentWrappingVersion: k.currentWrappingVersion,
+    wrappingVersions: k.wrappingVersions.map((w) => ({
+      keyVersion: w.keyVersion,
+      vaultVersion: w.vaultVersion,
+    })),
+    indexVersion: k.index.vaultVersion,
+    controlVersion: k.control.vaultVersion,
+  }));
+  const request = {
+    schemaVersion: 1,
+    bindingRevision: input.bindingRevision,
+    bindingDigest: input.bindingDigest,
+    keySets,
+    secrets: input.secrets.map((s) => ({
+      mapping: s.mapping,
+      purpose: s.purpose,
+      version: s.version,
+    })),
+  };
+  return tenantLegacy(
+    application,
+    { environment: input.environment, tenant: input.tenant },
+    request,
+    input,
+  );
+}
+exports.applicationDescriptorFromTenantLegacy =
+  applicationDescriptorFromTenantLegacy;
+exports.applicationSnapshotFromTenantLegacy =
+  applicationSnapshotFromTenantLegacy;

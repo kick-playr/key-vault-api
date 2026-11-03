@@ -265,3 +265,8 @@ exports.parseApplicationDescriptor = require('./application-client.cjs').parseAp
 exports.applicationSnapshotFromLegacy = require('./application-client.cjs').applicationSnapshotFromLegacy;
 
 exports.applicationDescriptorFromLegacy = require('./application-client.cjs').applicationDescriptorFromLegacy;
+exports.applicationDescriptorFromTenantLegacy=require('./application-client.cjs').applicationDescriptorFromTenantLegacy;
+exports.applicationSnapshotFromTenantLegacy=require('./application-client.cjs').applicationSnapshotFromTenantLegacy;
+
+exports.createTenantRotationCoordinator=require('./tenant-rotation.cjs').createTenantRotationCoordinator;
+exports.createMongoTenantRotationStore=require('./tenant-rotation.cjs').createMongoTenantRotationStore;

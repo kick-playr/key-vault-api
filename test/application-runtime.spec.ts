@@ -1021,3 +1021,23 @@ it('checks a metadata-only legacy baseline on cold startup without fetching obso
   await expect(f.runtime.withValue((v) => v)).rejects.toThrow();
   f.runtime.close();
 });
+it('treats manager invitation cookie keys as encryption material in live and legacy baselines',async()=>{
+ const f=fixture();f.ns().resourceAssociations!['secrets/arbitrary-database-name']!.envName='MANAGER_INVITATION_FLOW_KEY';
+ expect((await f.service.desired(scope,'app')).resources[0]!.classification).toBe('encryption-key');
+ const {applicationDescriptorFromLegacy,bindingDigest}=await import('@kick-playr/local-key-vault/runtime-client');
+ const input={schemaVersion:1 as const,bindingRevision:1,keySets:[],secrets:[{mapping:'MANAGER_INVITATION_FLOW_KEY',purpose:'invitation-flow',version:'a'.repeat(32)}]};
+ expect(applicationDescriptorFromLegacy('app',scope,{...input,bindingDigest:bindingDigest(input)}).resources[0]!.classification).toBe('encryption-key');
+});
+it('converts tenant legacy key pins into canonical v2 names without reading private values',async()=>{
+ const {applicationDescriptorFromTenantLegacy,bindingDigest}=await import('@kick-playr/local-key-vault/runtime-client');
+ const selected={environment:'development',tenant:'club'};
+ const request={schemaVersion:1 as const,bindingRevision:3,keySets:[{reference:'workflow-local:club:key',mappings:{wrapping:'CLUB_WRAPPING_KEY_V1',index:'CLUB_INDEX_KEY',control:'CLUB_CONTROL_KEY'},currentWrappingVersion:'v1',wrappingVersions:[{keyVersion:'v1',vaultVersion:'a'.repeat(32)}],indexVersion:'b'.repeat(32),controlVersion:'c'.repeat(32)}],secrets:[]};
+ const descriptor=applicationDescriptorFromTenantLegacy('explorer-api',selected,{...request,bindingDigest:bindingDigest(request)});
+ expect(descriptor.resources).toHaveLength(3);expect(descriptor.resources.every(r=>r.classification==='encryption-key')).toBe(true);expect(descriptor.resources.find(r=>r.mapping==='CLUB_WRAPPING_KEY_V1')!.name).toMatch(/^tk-wrapping-[a-f0-9]{64}$/);
+});
+it('admits only reviewed ordinary tenant Mongo and Clerk slots alongside private runtime credentials',async()=>{
+ const f=fixture();f.ns().applications={'club-api':{displayName:'Club',description:''},'explorer-api':{displayName:'Explorer',description:''}};
+ for(const application of ['club-api','explorer-api'])for(const mapping of ['MONGODB_URI','CLERK_SECRET_KEY','RUNTIME_CREDENTIAL_ABCDEF1234567890ABCDEF12']){
+ f.ns().resourceAssociations={'secrets/arbitrary-database-name':{envName:mapping,memberships:{[application]:'latest'}}};
+ const d=await f.service.desired({...scope,tenant:'club'},application);expect(d.resources[0]!.classification).toBe(application==='club-api'&&mapping.startsWith('RUNTIME_CREDENTIAL_')?'managed-credential':'secret');}
+});

@@ -140,12 +140,15 @@ function classification(
     scope.tenant === '_shared' &&
     (shared.includes(mapping) ||
       (application === 'explorer' &&
-        /^EXPLORER_CLUB_[A-Z0-9_]+_CLERK_SECRET_KEY$/.test(mapping)));
-  if (!allowed && !tenantKey && !managedCredential)
+        /^EXPLORER_CLUB_[A-Z0-9_]+_CLERK_SECRET_KEY$/.test(mapping)) ||
+      (application==='explorer-api'&&/^[A-Z][A-Z0-9_]{0,100}_CLERK_SECRET_KEY$/.test(mapping)));
+  const tenantCredential=application==='explorer-api'&&scope.tenant!=='_shared'&&/^RUNTIME_CREDENTIAL_[A-Z0-9_]{1,100}$/.test(mapping);
+  const tenantConnection=['club-api','explorer-api'].includes(application)&&scope.tenant!=='_shared'&&['MONGODB_URI','CLERK_SECRET_KEY'].includes(mapping);
+  if (!allowed && !tenantKey && !managedCredential && !tenantCredential && !tenantConnection)
     fail(409, 'UnsupportedApplicationMapping');
   if (managedCredential) return 'managed-credential';
   return tenantKey ||
-    /(?:WRAPPING_KEY_V[0-9]+|INDEX_KEY|CONTROL_KEY|CREDENTIAL_KEY|ENCRYPTION_KEY)$/.test(
+    /(?:WRAPPING_KEY_V[0-9]+|INDEX_KEY|CONTROL_KEY|CREDENTIAL_KEY|ENCRYPTION_KEY|MANAGER_INVITATION_FLOW_KEY)$/.test(
       mapping,
     )
     ? 'encryption-key'

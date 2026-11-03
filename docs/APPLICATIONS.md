@@ -165,3 +165,28 @@ fields. One namespace transaction validates all changes and advances the model
 revision once. Unmentioned resources keep their memberships, including links
 outside the current inventory page. The existing write/list and tenant catalog
 list checks apply, and canonical ENV names remain shared across applications.
+
+## Durable tenant rotation adapter contract
+
+The server-only `runtime-client/tenant-rotation` entry provides a native MongoDB
+control-store adapter and a coordinator for reviewed concrete record codecs.
+It is a prerequisite, not a claim that installing the library migrates data.
+A plan binds the namespace and all three exact key resources/versions with
+`rotationKeyDigest`, and retains historical wrapping aliases. A new wrapping
+key uses its immutable vault version as its logical envelope keyVersion; bytes
+must never change beneath an existing alias such as `v1`.
+
+Beginning an operation atomically persists progress and changes the selected
+tenant to `in-rotation`. The coordinator requires complete wrapping/index/control
+coverage, checkpoints bounded batches, verifies data, then activates all control
+references/revisions in one fenced transaction before restoring the previous
+lifecycle state. Failures remain unavailable and resume from durable checkpoints.
+Worker writes use `withWriteFence`'s supplied session plus exact ciphertext CAS;
+unsupported cross-cluster transaction topology must fail closed.
+
+Authenticated expiring records with unreconstructable blind-index preimages wait
+for their bounded expiry. They are retained as inactive history, not silently
+invalidated while live. Workers must reject unknown forms or unbounded expiry.
+No old key is retired by this contract. Progress contains stages/counts/version
+identifiers, never key values or decrypted records. Completed proofs are always
+read from the current per-tenant operation, not an archived completion.

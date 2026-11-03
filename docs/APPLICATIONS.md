@@ -190,3 +190,9 @@ invalidated while live. Workers must reject unknown forms or unbounded expiry.
 No old key is retired by this contract. Progress contains stages/counts/version
 identifiers, never key values or decrypted records. Completed proofs are always
 read from the current per-tenant operation, not an archived completion.
+
+Distinct historical wrapping aliases may point to the same immutable wrapping
+version. This is necessary when an index/control-only rotation changes the
+active keyset label to a UUID while preserving old envelopes labelled `v1`.
+Alias names remain unique, role separation and immutable-pin checks still apply,
+and aliases never point to different bytes under the same name.

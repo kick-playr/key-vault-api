@@ -33,10 +33,10 @@ function descriptor(input) {
     const m = object(k.mappings, ['wrapping', 'index', 'control']);
     const names = { wrapping: addMapping(m.wrapping), index: addMapping(m.index), control: addMapping(m.control) };
     check(Array.isArray(k.wrappingVersions) && k.wrappingVersions.length > 0 && k.wrappingVersions.length <= 100);
-    const keys = new Set(), pins = new Set();
+    const keys = new Set();
     const wrappingVersions = k.wrappingVersions.map(rawVersion => {
       const v = object(rawVersion, ['keyVersion', 'vaultVersion']); const key = keyVersion(v.keyVersion), pin = version(v.vaultVersion);
-      check(!keys.has(key) && !pins.has(pin)); keys.add(key); pins.add(pin);
+      check(!keys.has(key)); keys.add(key);
       return { keyVersion: key, vaultVersion: pin };
     }).sort((a, b) => compare(a.keyVersion, b.keyVersion));
     const current = keyVersion(k.currentWrappingVersion); check(keys.has(current)); count += wrappingVersions.length + 2;

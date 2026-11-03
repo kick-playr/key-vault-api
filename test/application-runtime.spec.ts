@@ -1041,3 +1041,9 @@ it('admits only reviewed ordinary tenant Mongo and Clerk slots alongside private
  f.ns().resourceAssociations={'secrets/arbitrary-database-name':{envName:mapping,memberships:{[application]:'latest'}}};
  const d=await f.service.desired({...scope,tenant:'club'},application);expect(d.resources[0]!.classification).toBe(application==='club-api'&&mapping.startsWith('RUNTIME_CREDENTIAL_')?'managed-credential':'secret');}
 });
+it('retains distinct wrapping aliases for one immutable key when only index/control rotates',async()=>{
+ const {bindingDigest,parseSnapshotRequest}=await import('@kick-playr/local-key-vault/runtime-client');
+ const k={reference:'workflow-local:club:key',mappings:{wrapping:'CLUB_WRAPPING_KEY_V1',index:'CLUB_INDEX_KEY',control:'CLUB_CONTROL_KEY'},currentWrappingVersion:'a'.repeat(32),wrappingVersions:[{keyVersion:'v1',vaultVersion:'a'.repeat(32)},{keyVersion:'a'.repeat(32),vaultVersion:'a'.repeat(32)}],indexVersion:'b'.repeat(32),controlVersion:'c'.repeat(32)};
+ const body={schemaVersion:1 as const,bindingRevision:4,keySets:[k],secrets:[]};const parsed=parseSnapshotRequest({...body,bindingDigest:bindingDigest(body)});expect(parsed.keySets[0]!.wrappingVersions).toHaveLength(2);
+ const duplicate={...body,keySets:[{...k,wrappingVersions:[k.wrappingVersions[0]!,k.wrappingVersions[0]!]}]};expect(()=>bindingDigest(duplicate)).toThrow();
+});

@@ -463,6 +463,7 @@ function createMongoTenantRotationStore({
           { session },
         );
         check(paused.modifiedCount === 1);
+        next.createdAt=clock();
         if (job) {
           await history.updateOne(
             { _id: job.id },

@@ -22,6 +22,11 @@ export function runtimeReferences(input:unknown):RuntimeReferences {
  }
  const legacy=importRuntimeConfiguration(input);return runtimeReferences({kind:legacy.kind,schemaVersion:2,id:legacy.id,applications:Object.keys(legacy.applications),tenants:legacy.tenants.map(t=>({tenant:t.tenant,applications:t.applications}))});
 }
+function credentialName(ns:Namespace,purpose:string):{displayName?:string}{
+ if(!/^runtime-credential-[a-f0-9]{24}$/.test(purpose))return{};
+ const record=Object.values(ns.oauthCredentials??{}).find(r=>r.purpose===purpose);
+ return{displayName:record?.provider==='bexio'?'Bexio OAuth credentials':record?.provider==='dropbox'?'Dropbox OAuth credentials':'Integration credentials'};
+}
 function policy(ns:Namespace,name:string,applications?:string[]){
  const association=ns.resourceAssociations?.['secrets/'+name];const policies=Object.entries(association?.memberships??{}).filter(([app])=>!applications||applications.includes(app)).map(([,p])=>p);
  if(new Set(policies).size>1)fail(409,'ConflictingTenantBindingPolicies');return{mapping:association?.envName,version:policies[0]};
@@ -31,7 +36,7 @@ export function inheritedApplications(scope:Scope,ns:Namespace,names:string[]):R
   const app=ns.applications?.[name];if(!app||ns.deletedApplications?.includes(name))fail(409,'RuntimeApplicationNotFound');
   const secrets:SecretSelection[]=Object.entries(ns.resourceAssociations??{}).flatMap(([ref,a])=>{
    const version=a.memberships[name];if(!version||!ref.startsWith('secrets/'))return[];const resource=ref.slice(8),versions=ns.secrets[resource];const selected=version==='latest'?versions?.at(-1):versions?.find(v=>v.version===version);if(!selected)fail(409,'MissingOrAmbiguousRuntimeVersion');
-   const purpose=selected.tags?.purpose;if(!purpose||vaultName(scope,'secret',purpose)!==resource)fail(409,'MissingCanonicalPurpose');return[{purpose:identifier(purpose),mapping:envName(a.envName),version}];
+   const purpose=selected.tags?.purpose;if(!purpose||vaultName(scope,'secret',purpose)!==resource)fail(409,'MissingCanonicalPurpose');return[{purpose:identifier(purpose),mapping:envName(a.envName),version,...credentialName(ns,purpose)}];
   });return[name,{displayName:app.displayName,description:app.description,secrets}];
  }));
 }
@@ -44,7 +49,7 @@ export function inheritedTenant(scope:Scope,ns:Namespace,applications?:string[])
   const last=versions.at(-1);if(!last||last.tags?.keySet||name.startsWith('tk-'))return[];
   const prior=priorSecrets.get(name),p=policy(ns,name,applications),purpose=last.tags?.purpose??prior?.purpose,mapping=p.mapping??last.tags?.envName??prior?.mapping;
   if(!purpose||!mapping||vaultName(scope,'secret',purpose)!==name)return[];
-  return[{purpose:identifier(purpose),mapping:envName(mapping),version:p.version??(last.tags?.envName?'latest':prior?.version)??'latest'}];
+  return[{purpose:identifier(purpose),mapping:envName(mapping),...credentialName(ns,purpose),version:p.version??(last.tags?.envName?'latest':prior?.version)??'latest'}];
  });
  const sets=new Map<string,KeyPlan>();for(const r of requests)for(const k of r.keySets){const old=sets.get(k.reference);if(old&&JSON.stringify(old)!==JSON.stringify(k))fail(409,'ConflictingTenantKeyDefinitions');sets.set(k.reference,structuredClone(k));}
  for(const versions of Object.values(ns.secrets)){const tags=versions.at(-1)?.tags;if(!tags?.keySet||sets.has(tags.keySet))continue;const layout=tenantKeySet(scope,tags.keySet);const roles=layout.entries.map(e=>({role:e.role,versions:ns.secrets[e.name]}));if(roles.some(r=>!r.versions?.length))fail(409,'IncompleteTenantKeySet');

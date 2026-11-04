@@ -9,6 +9,17 @@ import { active, find, VaultService } from './vault.js';
 /** Startup reads only. Every member is resolved from a single committed namespace. */
 export class RuntimeSnapshotService {
   constructor(private readonly vault: VaultService) {}
+  /** Runtime identities may omit ordinary secrets, retaining every exact published key descriptor. */
+  async snapshotPublished(scope: Scope, input: unknown, published: RuntimeSnapshotRequest): Promise<RuntimeSnapshot> {
+    let requested: RuntimeSnapshotRequest;
+    try { requested = parseSnapshotRequest(input); }
+    catch { fail(400, 'BadParameter'); }
+    const keysOnly = { ...published, secrets: [] };
+    if (requested.bindingDigest !== published.bindingDigest &&
+        !(requested.secrets.length === 0 && requested.keySets.length > 0 &&
+          requested.bindingDigest === bindingDigest(keysOnly))) fail(403, 'Forbidden');
+    return this.snapshot(scope, requested);
+  }
   async snapshot(scope: Scope, input: unknown): Promise<RuntimeSnapshot> {
     let request: RuntimeSnapshotRequest;
     try {

@@ -245,7 +245,7 @@ export async function createApp(input: VaultConfig): Promise<INestApplication> {
     @Post('runtime-snapshot') @HttpCode(200)
     async snapshot(@Req() req:ScopedRequest,@Param('application') application:string,@Body() body:unknown){
       if(!body||typeof body!=='object'||!Number.isSafeInteger((body as {bindingRevision?:unknown}).bindingRevision))fail(400,'BadParameter');
-      const selector=body as {bindingRevision:number;bindingDigest:unknown};const published=await runtimeManifests.get(req.vaultScope,application,String(selector.bindingRevision));if(selector.bindingDigest!==published.request.bindingDigest)fail(403,'Forbidden');return runtimeSnapshots.snapshot(req.vaultScope,body);
+      const selector=body as {bindingRevision:number;bindingDigest:unknown};const published=await runtimeManifests.get(req.vaultScope,application,String(selector.bindingRevision));return runtimeSnapshots.snapshotPublished(req.vaultScope,body,published.request);
     }
     @Get('application-runtime/:target/mode')
     mode(@Req() req:ScopedRequest,@Param('application') application:string,@Param('target') target:string){this.target(application,target);return applicationRuntime.mode(req.vaultScope,application);}

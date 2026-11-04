@@ -91,3 +91,21 @@ it('exposes read-only HTTP and namespace aliases under exact read grant without 
     expect(doc.body.paths['/local/runtime-snapshot'].post.parameters.some((p: any) => p.name === 'api-version')).toBe(false);
   } finally { await app.close(); spy.mockRestore(); }
 });
+
+it('runtime identity can request exactly the published historical keys without obsolete ordinary credentials', async () => {
+  const f = fixture();
+  const published = { ...f.request, secrets: [{ purpose: 'retired-provider', mapping: 'PROVIDER_SECRET', version: 'a'.repeat(32) }] };
+  published.bindingDigest = bindingDigest(published);
+  const service = f.service;
+  const snapshot = await service.snapshotPublished(scope, f.request, published);
+  expect(snapshot.secrets).toEqual([]);
+  expect(snapshot.keySets).toHaveLength(1);
+  const changed: RuntimeSnapshotRequest = JSON.parse(JSON.stringify(f.request));
+  changed.keySets[0]!.indexVersion = 'b'.repeat(32);
+  changed.bindingDigest = bindingDigest(changed);
+  await expect(service.snapshotPublished(scope, changed, published)).rejects.toMatchObject({ status: 403 });
+  const injected = { ...published, secrets: [{ purpose: 'other', mapping: 'OTHER_SECRET', version: 'b'.repeat(32) }] };
+  injected.bindingDigest = bindingDigest(injected);
+  await expect(service.snapshotPublished(scope, injected, published)).rejects.toMatchObject({ status: 403 });
+  await expect(service.snapshotPublished(scope, { ...f.request, bindingDigest: published.bindingDigest }, published)).rejects.toMatchObject({ status: 400 });
+});

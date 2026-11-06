@@ -29,7 +29,7 @@ export function scopeFilter(scope: ResourceScope): ResourceScope {
     !/^[a-z][a-z0-9-]{0,31}$/.test(scope.environment) ||
     !["application", "tenant"].includes(scope.ownerType) ||
     typeof scope.ownerId !== "string" ||
-    !/^[a-z][a-z0-9-]{0,63}$/.test(scope.ownerId)
+    !/^[a-z0-9][a-z0-9-]{0,63}$/.test(scope.ownerId)
   )
     throw unavailable();
   if (scope.ownerType === "tenant") tenantIdentifier(scope.ownerId);
@@ -51,6 +51,7 @@ export class V2MongoStore {
   readonly grants: Collection<GrantRecord>;
   readonly links: Collection<ResourceLink>;
   private closed = false;
+  private readonly transactions = new WeakSet<V2Transaction>();
   private constructor(
     private readonly client: MongoClient,
     private readonly db: Db,
@@ -128,7 +129,15 @@ export class V2MongoStore {
     const session = this.client.startSession();
     try {
       return await session.withTransaction(
-        () => work({ session, db: this.db }),
+        async () => {
+          const tx = Object.freeze({ session, db: this.db });
+          this.transactions.add(tx);
+          try {
+            return await work(tx);
+          } finally {
+            this.transactions.delete(tx);
+          }
+        },
         {
           readConcern: { level: "snapshot" },
           writeConcern: { w: "majority" },
@@ -138,6 +147,29 @@ export class V2MongoStore {
     } finally {
       await session.endSession();
     }
+  }
+  private within<T>(
+    tx: V2Transaction | undefined,
+    work: (tx: V2Transaction) => Promise<T>,
+  ): Promise<T> {
+    if (!tx) return this.transaction(work);
+    if (!this.transactions.has(tx)) throw unavailable();
+    return work(tx);
+  }
+  sealValue(
+    scope: ResourceScope,
+    resourceId: string,
+    versionId: string,
+    schemaIdentity: string,
+    value: Buffer,
+  ) {
+    return this.cipher.seal(
+      scopeFilter(scope),
+      resourceId,
+      versionId,
+      schemaIdentity,
+      value,
+    );
   }
   private assertVersion(
     resource: ResourceRecord,
@@ -176,19 +208,17 @@ export class V2MongoStore {
     actorId: string,
     action: string,
   ): Promise<void> {
-    await tx.db
-      .collection<AuditRecord>("vault_audit_events")
-      .insertOne(
-        {
-          _id: randomUUID(),
-          ...scopeFilter(scope),
-          actorId,
-          action,
-          targetId,
-          at: Date.now(),
-        },
-        { session: tx.session },
-      );
+    await tx.db.collection<AuditRecord>("vault_audit_events").insertOne(
+      {
+        _id: randomUUID(),
+        ...scopeFilter(scope),
+        actorId,
+        action,
+        targetId,
+        at: Date.now(),
+      },
+      { session: tx.session },
+    );
     await tx.db
       .collection("vault_change_heads")
       .updateOne(
@@ -201,6 +231,7 @@ export class V2MongoStore {
     resource: ResourceRecord,
     version: ResourceVersion,
     actorId: string,
+    transaction?: V2Transaction,
   ): Promise<void> {
     const r = structuredClone(resource),
       v = structuredClone(version);
@@ -212,7 +243,7 @@ export class V2MongoStore {
       v.versionNumber !== 1
     )
       throw conflict();
-    await this.transaction(async (tx) => {
+    await this.within(transaction, async (tx) => {
       await this.resources.insertOne(r, { session: tx.session });
       await this.versions.insertOne(v, { session: tx.session });
       await this.changed(
@@ -234,20 +265,27 @@ export class V2MongoStore {
     expectedRevision: number,
     version: ResourceVersion,
     actorId: string,
+    transaction?: V2Transaction,
+    metadata?: Pick<
+      ResourceRecord,
+      "name" | "contentType" | "valueFormat" | "schemaIdentity"
+    >,
   ): Promise<void> {
     const v = structuredClone(version);
-    await this.transaction(async (tx) => {
+    await this.within(transaction, async (tx) => {
       const r = await this.resources.findOne(
         { _id: resourceId, ...scopeFilter(scope) },
         { session: tx.session },
       );
-      if (!r || r.revision !== expectedRevision) throw conflict();
-      this.assertVersion(r, v);
+      if (!r || r.deletedAt !== undefined || r.revision !== expectedRevision)
+        throw conflict();
+      this.assertVersion({ ...r, ...metadata }, v);
       if (v.versionNumber !== r.currentVersionNumber + 1) throw conflict();
       const changed = await this.resources.updateOne(
         { _id: resourceId, ...scopeFilter(scope), revision: expectedRevision },
         {
           $set: {
+            ...metadata,
             currentVersionId: v._id,
             currentVersionNumber: v.versionNumber,
           },
@@ -281,6 +319,7 @@ export class V2MongoStore {
       .find(
         {
           ...scopeFilter(scope),
+          deletedAt: { $exists: false },
           ...(options.after ? { _id: { $gt: options.after } } : {}),
           ...(options.kind ? { kind: options.kind } : {}),
         },
@@ -303,12 +342,17 @@ export class V2MongoStore {
     scope: ResourceScope,
     resourceId: string,
     versionId: string,
+    transaction?: V2Transaction,
   ): Promise<Buffer> {
-    const version = await this.versions.findOne({
-      _id: versionId,
-      resourceId,
-      ...scopeFilter(scope),
-    });
+    if (transaction && !this.transactions.has(transaction)) throw unavailable();
+    const version = await this.versions.findOne(
+      {
+        _id: versionId,
+        resourceId,
+        ...scopeFilter(scope),
+      },
+      transaction ? { session: transaction.session } : {},
+    );
     if (!version) throw unavailable();
     return this.cipher.open(
       scope,

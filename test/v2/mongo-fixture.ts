@@ -63,14 +63,12 @@ export async function replicaFixture() {
       }
     }
     if (!connected) throw Error("Disposable replica set did not start");
-    await client
-      .db("admin")
-      .command({
-        replSetInitiate: {
-          _id: "vaultv2",
-          members: [{ _id: 0, host: `127.0.0.1:${port}` }],
-        },
-      });
+    await client.db("admin").command({
+      replSetInitiate: {
+        _id: "vaultv2",
+        members: [{ _id: 0, host: `127.0.0.1:${port}` }],
+      },
+    });
     let primary = false;
     while (!failed && Date.now() < deadline) {
       const hello = await client.db("admin").command({ hello: 1 });

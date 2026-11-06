@@ -1,5 +1,5 @@
 import { databaseFromMongoUri } from "../mongodb-url.js";
-const tenantPattern = /^[a-z](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
+const tenantPattern = /^[a-z0-9](?:[a-z0-9-]{0,50}[a-z0-9])?$/;
 export function tenantIdentifier(value: unknown): string {
   if (
     typeof value !== "string" ||

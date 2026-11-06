@@ -1,3 +1,8 @@
+import { ResourceService } from "../../src/v2/resources.js";
+import { IntegrationSchemas } from "../../src/v2/integration-schemas.js";
+import { ConsentService, consentReader } from "../../src/v2/consents.js";
+import { GrantService } from "../../src/v2/grants.js";
+import { Authorization } from "../../src/v2/authorization.js";
 import { createHash } from "node:crypto";
 import { V2MongoStore } from "../../src/v2/mongo-store.js";
 import { ValueCipher } from "../../src/v2/value-cipher.js";
@@ -186,4 +191,228 @@ it("rejects the wrong master key and legacy target database without exposing con
       masterKey: Buffer.alloc(32, 9),
     }),
   ).rejects.toThrow();
+});
+
+it("delivers application passwords only through approved provisioning and atomically replaces grants", async () => {
+  const tokens: string[] = [],
+    actor = { issuer: "https://identity.invalid", subject: "admin" };
+  const authorization = new Authorization(
+    {
+      fence: async () => {},
+      roles: async () => ({
+        revision: "1",
+        globalAdmin: true,
+        clubAdminTenantIds: [],
+      }),
+    },
+    { read: async () => ({ enabled: true, revision: 1 }) },
+  );
+  await fixture.client
+    .db("key-vault-kick-playr")
+    .collection("vault_application_tenants")
+    .insertOne({
+      applicationId: "explorer-api",
+      environment: "development",
+      tenantId: "fcrww",
+      enabled: true,
+    });
+  await fixture.client
+    .db("key-vault-kick-playr")
+    .collection("vault_application_environments")
+    .insertOne({
+      applicationId: "explorer-api",
+      environment: "development",
+      revision: 1,
+      enabled: true,
+    });
+  let approved = true;
+  const service = new GrantService(store, authorization, {
+    approve: async () => ({
+      applicationId: "explorer-api",
+      environment: "development",
+      approvedTenantIds: approved ? ["fcrww"] : [],
+      fence: async () => {},
+      deliver: async (token: string) => {
+        tokens.push(token);
+      },
+    }),
+  });
+  approved = false;
+  await expect(
+    service.issue(actor, {
+      applicationId: "explorer-api",
+      environment: "development",
+    }),
+  ).rejects.toThrow();
+  expect(tokens).toHaveLength(0);
+  approved = true;
+  const first = await service.issue(actor, {
+    applicationId: "explorer-api",
+    environment: "development",
+  });
+  expect(tokens).toHaveLength(1);
+  expect(JSON.stringify(first)).not.toContain(tokens[0]);
+  expect(first).not.toHaveProperty("tokenHash");
+  expect(
+    (
+      await service.authorize(
+        "Bearer " + tokens[0],
+        "explorer-api",
+        "development",
+      )
+    )._id,
+  ).toBe(first._id);
+  await expect(
+    service.issue(actor, {
+      applicationId: "explorer-api",
+      environment: "development",
+      replaces: { id: "missing", revision: 1 },
+    }),
+  ).rejects.toThrow();
+  expect(tokens).toHaveLength(1);
+  const next = await service.rotate(actor, first._id, first.revision);
+  await expect(
+    service.authorize("Bearer " + tokens[0], "explorer-api", "development"),
+  ).rejects.toThrow();
+  expect(
+    (
+      await service.authorize(
+        "Bearer " + tokens[1],
+        "explorer-api",
+        "development",
+      )
+    )._id,
+  ).toBe(next._id);
+  await service.revoke(actor, next._id, next.revision);
+  await expect(
+    service.authorize("Bearer " + tokens[1], "explorer-api", "development"),
+  ).rejects.toThrow();
+});
+
+it("keeps tenant consent in one document and only permits its club admin to change it", async () => {
+  const reader = consentReader(store),
+    authorization = new Authorization(
+      {
+        fence: async () => {},
+        roles: async (actor) => ({
+          revision: "1",
+          globalAdmin: actor.subject === "global",
+          clubAdminTenantIds: actor.subject === "club" ? ["fcrww"] : [],
+        }),
+      },
+      reader,
+    );
+  const consents = new ConsentService(store, authorization),
+    club = { issuer: "https://identity.invalid", subject: "club" },
+    global = { issuer: "https://identity.invalid", subject: "global" };
+  await expect(consents.approve(global, scope, 0)).rejects.toThrow();
+  await consents.approve(club, scope, 0);
+  const permit = await authorization.require(global, "values:read", scope);
+  await consents.revoke(club, scope, 1);
+  await expect(authorization.assertCurrent(permit)).rejects.toThrow();
+  expect(
+    await fixture.client
+      .db("key-vault-kick-playr")
+      .collection("vault_tenant_admin_consents")
+      .countDocuments({}),
+  ).toBe(1);
+  await expect(
+    consents.approve(club, { ...scope, ownerId: "other" }, 0),
+  ).rejects.toThrow();
+});
+
+it("saves typed static integration JSON with plaintext metadata and fences value access through consent", async () => {
+  const reader = consentReader(store);
+  const authorization = new Authorization(
+      {
+        roles: async (actor) => ({
+          revision: "1",
+          globalAdmin: actor.subject === "global",
+          clubAdminTenantIds: actor.subject === "club" ? ["fcrww"] : [],
+        }),
+        fence: async () => {},
+      },
+      reader,
+    ),
+    resources = new ResourceService(
+      store,
+      authorization,
+      new IntegrationSchemas(),
+    );
+  const club = { issuer: "https://identity.invalid", subject: "club" },
+    global = { issuer: "https://identity.invalid", subject: "global" };
+  const created = await resources.create(club, scope, {
+    name: "Bexio Accounting",
+    kind: "integration",
+    schemaIdentity: "builtin:bexio@1",
+    value: {
+      clientId: "client",
+      clientSecret: "PRIVATE-BEXIO",
+      accountReference: "account",
+    },
+  });
+  expect(created.name).toBe("Bexio Accounting");
+  expect(created.kind).toBe("integration");
+  expect(created).not.toHaveProperty("value");
+  await expect(
+    resources.reveal(global, scope, created._id, created.currentVersionId),
+  ).rejects.toThrow();
+  const revealed = await resources.reveal(
+    club,
+    scope,
+    created._id,
+    created.currentVersionId,
+  );
+  try {
+    expect(JSON.parse(revealed.toString()).clientSecret).toBe("PRIVATE-BEXIO");
+  } finally {
+    revealed.fill(0);
+  }
+  const changed = await resources.update(club, scope, created._id, 1, {
+    name: "Bexio Finance",
+    kind: "integration",
+    schemaIdentity: "builtin:bexio@1",
+    value: {
+      clientId: "client",
+      clientSecret: "PRIVATE-NEXT",
+      accountReference: "account",
+    },
+  });
+  expect(changed.revision).toBe(2);
+  expect(changed.name).toBe("Bexio Finance");
+  await store.links.insertOne({
+    _id: "in-use",
+    applicationId: "club-api",
+    environment: "development",
+    tenantId: "fcrww",
+    resourceId: created._id,
+    accessName: "BEXIO",
+    versionPolicy: "latest",
+    revision: 1,
+  });
+  await expect(
+    resources.remove(club, scope, created._id, 2, "Bexio Finance"),
+  ).rejects.toThrow();
+  await store.links.deleteOne({ _id: "in-use" });
+  await resources.remove(club, scope, created._id, 2, "Bexio Finance");
+  expect(
+    (await resources.list(club, scope, { limit: 100 })).some(
+      (r) => r._id === created._id,
+    ),
+  ).toBe(false);
+  await expect(
+    resources.create(club, scope, {
+      name: "Runtime material",
+      kind: "integration",
+      schemaIdentity: "builtin:bexio@1",
+      value: {
+        clientId: "c",
+        clientSecret: "p",
+        accountReference: "a",
+        accessToken: "NO",
+      },
+    }),
+  ).rejects.toThrow();
+  const document = await store.resources.findOne({ _id: created._id });
+  expect(JSON.stringify(document)).not.toContain("PRIVATE-BEXIO");
 });

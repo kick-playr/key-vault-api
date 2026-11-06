@@ -25,6 +25,8 @@ export interface ResourceRecord extends ResourceScope {
   revision: number;
   currentVersionId: string;
   currentVersionNumber: number;
+  deletedAt?: number;
+  linkFence?: number;
 }
 export interface ResourceVersion extends ResourceScope {
   _id: string;

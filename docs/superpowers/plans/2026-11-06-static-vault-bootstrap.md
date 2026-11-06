@@ -134,3 +134,5 @@
 - Plan coverage scan: Tasks 1–2 cover database/document/encryption requirements; 3–4 cover identity/consent/grants/resources/schema/links; 5–7 cover bootstrap/instances/rotation; 8 covers tenant runtime secrets; 9–10 cover UI and all five consumers; 11–12 cover migration/rollback/verification. Interfaces are versioned at the v2 boundary.
 
 - Tasks 1–2: implemented and tested normalized MongoDB foundation. Foundation 3/3 and disposable replica-set persistence 4/4 passed; legacy/default suite 240/240 passed before the additional scoped-query hardening regression, whose targeted suite and typecheck also pass. Metadata is plaintext; only values encrypted. Live services/databases untouched.
+
+- 2026-11-07: Tasks 3–4 library slice added: consent/grant authorization, typed integration schemas, resource version/update/reveal/delete and explicit link validation. Unit 17/17, disposable Mongo 7/7, default regression suite 257/257 and typecheck pass. Production identity/delivery wiring, persisted schemas and further link race coverage remain; these tasks are intentionally unchecked.

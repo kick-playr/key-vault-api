@@ -13,6 +13,8 @@ describe("v2 document foundation", () => {
     expect(databaseNames.vault).toBe("key-vault-kick-playr");
     expect(databaseNames.control).toBe("control-kick-playr");
     expect(databaseNames.tenant("fcrww")).toBe("fcrww-kick-playr");
+    expect(databaseNames.tenant("123")).toBe("123-kick-playr");
+    expect(databaseNames.tenant("a".repeat(52))).toHaveLength(63);
     for (const tenant of [
       "",
       "../admin",
@@ -21,7 +23,7 @@ describe("v2 document foundation", () => {
       "key-vault",
       "control",
       "a/b",
-      "a".repeat(50),
+      "a".repeat(53),
     ])
       expect(() => databaseNames.tenant(tenant)).toThrow();
     expect(() =>
@@ -110,4 +112,19 @@ describe("v2 document foundation", () => {
     ).toThrow();
     cipher.close();
   });
+});
+it("authenticates long namespaced custom schema identities without truncating them", () => {
+  const cipher = new ValueCipher(Buffer.alloc(32, 5)),
+    identity =
+      "custom:development:tenant:" +
+      "t".repeat(52) +
+      ":" +
+      "s".repeat(64) +
+      "@1",
+    input = Buffer.from("{}");
+  const value = cipher.seal(scope, "resource", "version", identity, input);
+  expect(cipher.open(scope, "resource", "version", identity, value)).toEqual(
+    input,
+  );
+  cipher.close();
 });

@@ -2,8 +2,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { CipherPart, ResourceScope, ValueEnvelope } from "./records.js";
 import { tenantIdentifier } from "./database-names.js";
 const unavailable = () => Error("Vault value unavailable");
-const text = (v: unknown) =>
-  typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/.test(v);
+const text = (v: unknown, max = 128) =>
+  typeof v === "string" &&
+  v.length <= max &&
+  /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(v);
 const exact = (v: unknown, fields: string[]): v is Record<string, unknown> => {
   if (!v || typeof v !== "object") return false;
   const proto = Object.getPrototypeOf(v);
@@ -51,7 +53,7 @@ export class ValueCipher {
       !text(scope.ownerId) ||
       !text(resourceId) ||
       !text(versionId) ||
-      !text(schemaIdentity)
+      !text(schemaIdentity, 512)
     )
       throw unavailable();
     if (scope.ownerType === "tenant") tenantIdentifier(scope.ownerId);

@@ -16,6 +16,7 @@ It does not redesign ordinary Club configuration, business authorization rules, 
 | Area | Agreed behavior |
 | --- | --- |
 | Persistence | Explicit MongoDB collections, replacing large encrypted namespace aggregates as the authoritative model. Secret payloads remain encrypted. |
+| Document granularity | One document per grant, resource, resource version and relationship; no document containing all grants or all of a tenant's secrets. Names, tenant/application names, versions, types and other non-secret metadata remain plaintext and directly queryable. Encrypt only secret/key value payloads; grant passwords are stored as hashes. |
 | Applications | Each application has an entry, static secrets, tenant assignments and explicit resource links. |
 | Tenants | Assigning a tenant does not expose all its secrets. Only explicitly linked secrets and integrations are loaded. |
 | Application memory | Application-wide secrets may populate `process.env`. Tenant secrets remain in isolated server-only memory contexts. |
@@ -92,6 +93,16 @@ Named integrations remain structured objects in the tenant registry. Do not flat
 
 Collection names below are proposed concrete names. Every scoped collection uses compound indexes containing the environment and owner identity. Schema validators reject unknown security-critical fields and cross-environment references. No value is embedded in link, grant, consent, instance or audit documents.
 
+### MongoDB document principles
+
+Use collections as collections of individually addressable entities, not as containers for one global registry document. In particular, `vault_grants` contains **one document for each grant**. Grant creation inserts a document; revocation updates that grant by ID and expected revision. Do not load, rewrite or CAS an object/array containing every grant to change one credential.
+
+The same rule applies to resources, versions, applications, tenants, assignments and links. Histories and potentially growing relationships are separate documents with indexes, not unbounded nested arrays. Small bounded fields such as a grant's capability-name array can remain embedded in its own document.
+
+Names, descriptions, tenant/application IDs and names, resource type, content type, version IDs/numbers, encoding, schema identity, enabled state, timestamps, links, permissions and consent/rotation status are plaintext metadata. A metadata query, search, filter, sort or pagination operation requires **no payload decryption**. A secret-version listing obtains the display name/type/owner through indexed resource/tenant/application references and returns version metadata without the encrypted value field.
+
+Encrypt only fields that actually contain secret values: scalar credentials, encryption/private key material and integration JSON payloads. For integration JSON, the whole JSON value is one encrypted payload; its instance name, integration type and schema/version remain ordinary metadata. Grant passwords are the exception to reversible value storage: persist only their cryptographic hashes, never an encrypted or plaintext recoverable password.
+
 | Collection | Important fields / responsibility |
 | --- | --- |
 | `vault_applications` | `_id: applicationId`, display name, description, metadata revision, deletion state. |
@@ -99,27 +110,34 @@ Collection names below are proposed concrete names. Every scoped collection uses
 | `vault_tenants` | `_id: tenantId`, display name and non-secret catalog metadata. |
 | `vault_tenant_environments` | Unique `(tenantId, environment)`, status and resource/policy revisions. |
 | `vault_resources` | Resource ID, owner type/ID, environment, kind, unique owner-local name, content type, format, schema ID/version or key algorithm, selected/current version, enabled state and revision. |
-| `vault_resource_versions` | Immutable version ID, resource ID, scope, encrypted payload, encryption-envelope metadata, creation actor/time and lifecycle metadata. |
-| `vault_integration_schemas` | Built-in or tenant-owned custom schema identity, immutable versions, display-field definitions, static/public/private field annotations and validation limits. |
+| `vault_resource_versions` | One document per immutable version: version ID/number, resource ID, scope, kind, content type/encoding, schema reference, encrypted **value field** with its envelope, creation actor/time and lifecycle metadata. All fields except value material are queryable metadata. |
+| `vault_integration_schemas` | One document per built-in or tenant-owned custom schema definition, with name/type/owner and current version reference. |
+| `vault_integration_schema_versions` | One document per immutable schema version: schema identity, JSON schema, display-field definitions, static/public/private field annotations and validation limits. No actual integration credentials are present. |
 | `vault_application_tenants` | Unique `(applicationId, environment, tenantId)`, enabled state and revision. No secret values or duplicate ENV mappings. |
 | `vault_resource_links` | Application deployment, optional tenant ID, resource ID, access/ENV name, version policy and optional capability association. Explicitly selected resources only. |
-| `vault_grants` | ID, token hash, grant class, application/environment or permitted provisioning scope, capabilities, enabled state, policy revision and issuance/rotation audit references. Never plaintext grant passwords. |
+| `vault_grants` | **One document per grant:** ID, token hash, grant class, application/environment, bounded capabilities, enabled state, policy revision and issuance/rotation audit references. Never a single document containing every grant; never plaintext grant passwords. |
+| `vault_grant_scopes` | One document per explicit provisioning grant/owner-scope relationship when a grant covers multiple owners. Application grants derive effective access from their application links instead of copying all resource IDs into a grant document. |
 | `vault_tenant_admin_consents` | Unique `(tenantId, environment)`, global-admin-role approval, approval/revocation actor and times, monotonically increasing policy revision. No expiry by default. |
 | `vault_principal_bindings` | Authoritative references to the existing platform/tenant identity policy, including issuer/audience and policy revisions. Not a duplicate independently editable club-admin membership list. No application grant can modify these. |
-| `vault_application_instances` | Application/environment, random boot-instance ID, public process metadata, observed status, loaded view revision, loaded key versions, ACKs and explicit retirement record. |
-| `vault_key_rotations` | Owner/key, old/new versions, state, required participants, ACKs, membership revision, migration/activation status and administrator retirement decisions. |
+| `vault_application_instances` | One document per boot instance: application/environment, random boot-instance ID, public process metadata, observed status, loaded view revision and explicit retirement record. |
+| `vault_instance_key_versions` | One document per instance/key/version observation or acknowledgement, rather than an ever-growing key history array in the instance document. |
+| `vault_key_rotations` | One document per job: owner/key, old/new versions, state, participant membership revision and migration/activation status. |
+| `vault_key_rotation_participants` | One document per rotation/instance: required key version, ACK state and any explicitly authorized permanent-stop retirement. |
 | `vault_change_heads` | Effective-view/source revisions used to cheaply determine whether an authorized bootstrap view changed. Excludes audit reads and ordinary heartbeat timestamps. |
 | `vault_audit_events` | Append-only actor, scope, action, target IDs, result, policy/consent revision and correlation ID. No secret values, tokens or grant passwords. |
-| `vault_migration_jobs` | Reviewed source inventory/digests, staged target references, phase, verification results and rollback/cutover markers. No plaintext credential payloads. |
+| `vault_migration_jobs` | One document per job: reviewed inventory digest, phase, summary counts, verification and rollback/cutover markers. No plaintext credential payloads or embedded full-source inventories. |
+| `vault_migration_items` | One document per job/source entity or version: source digest/revision, staged target reference, verification and progress state. No secret values. |
 | `vault_platform_settings` | Versioned platform identity configuration and internal bootstrap references. Infrastructure root keys/URI remain external. |
 
 Required unique indexes include owner-local resource names, resource/version IDs, assignments, link access names per effective context, schema versions, consent scopes and instance boot IDs. Foreign-reference ownership is checked inside the same transaction as publication. No TTL index deletes cryptographic versions, runtime instance registrations or rotation participants.
+
+Index grant token hashes uniquely for direct credential lookup, grant application/environment/status for management, resource owner/name/type for inventory, resource ID/version for history, and relationship IDs for scope/usage checks. Reads use field projections that exclude encrypted values by default. Examples are `vault_grants.findOne({_id: grantId})`, resource inventory queries by tenant/environment/type, and version metadata queries by resource ID; none decrypts an aggregate registry.
 
 ### Encryption and transactions
 
 Proposed payload format: AES-256-GCM with a random data key per immutable resource version; wrap that key using Vault's externally supplied master key. Authenticate a canonical AAD containing format version, environment, owner, resource ID, resource version and schema identity. Use distinct AAD purposes for payload encryption and data-key wrapping. Swapping ciphertext or wrapped keys between owners/versions must fail authentication.
 
-Names/types/relationships can be indexed metadata; values and private key material are encrypted. Raw secret fingerprints are not exposed through metadata APIs. Root master-key rotation is an infrastructure operation, separate from application key rotation; retain the old root key until wrapped data keys have been migrated and verified.
+Names/types/relationships are deliberately plaintext, indexed metadata; encrypt the value field, not the enclosing document or namespace. Wrapped data keys and payload ciphertext/authentication fields belong to that value's encryption envelope. Raw secret fingerprints are not exposed through metadata APIs. Root master-key rotation is an infrastructure operation, separate from application key rotation; retain the old root key until wrapped data keys have been migrated and verified.
 
 Publish resource pointers, affected link/view revisions and audit records in MongoDB transactions with majority writes and CAS on the expected revision. Serve one coherent authorized bootstrap view using a database snapshot. If payloads require pagination, bind all pages to a fixed view/version set and publish nothing in the SDK until all pages validate. Do not independently read changing “latest” pointers page by page.
 
@@ -347,6 +365,7 @@ Partial staging is not activation. Resume by migration job/phase and digests, ne
 ### Security and isolation
 
 - Cross-application, cross-tenant and cross-environment grant tests, including submitting another application ID with a valid grant.
+- Create multiple grants/resources/versions and prove each is independently stored and addressed. Updating one grant must not replace an aggregate grant registry. Metadata list/search/version operations must succeed without invoking payload decryption and must not return value fields.
 - Human metadata-only access without consent; value reads and edits require consent. Revocation races a pending reveal/save and prevents publication/commit.
 - Test indirect value exposure through grant issuance/rotation, link changes, owner changes, self-appointment as club admin and exports.
 - Browser bundles, HTML, logs, audit records and error responses contain no private payloads or provisioning grants.

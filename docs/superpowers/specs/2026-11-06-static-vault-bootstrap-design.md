@@ -1,7 +1,7 @@
 # Static Vault, tenant integrations, and application bootstrap
 
 Date: 2026-11-06
-Status: **Draft for approval — implementation is not authorized by this document alone.**
+Status: **Approved by the user on 2026-11-06; implementation authorized.**
 
 ## 1. Intent and scope
 
@@ -92,6 +92,10 @@ Named integrations remain structured objects in the tenant registry. Do not flat
 ## 5. Vault MongoDB collections
 
 Collection names below are proposed concrete names. Every scoped collection uses compound indexes containing the environment and owner identity. Schema validators reject unknown security-critical fields and cross-environment references. No value is embedded in link, grant, consent, instance or audit documents.
+
+### Database names
+
+The user specifies the new database names: `key-vault-kick-playr` for Vault, `control-kick-playr` for the control plane, and `<tenant>-kick-playr` for tenant data (for example `fcrww-kick-playr`). Validate tenant identifiers before deriving names. Migration targets are explicit; never rename, redirect or overwrite an existing live database automatically during application startup. Environment isolation remains mandatory: identical naming does not authorize sharing unpartitioned development/production data.
 
 ### MongoDB document principles
 
@@ -402,7 +406,7 @@ The proposed collection/endpoint names, envelope layout, SDK API shape, required
 
 ### Builder check and remaining approval question
 
-The independent builder review identified shared authority-generation fencing and rotation-membership races; the explicit rules above settle them within the user's agreed behavior. One security decision remains for the user: bearer-password custody at cutover and future enrollment. Proposed policy is to replace existing application grants at migration, deliver the replacements only through the trusted deployment provisioning path, never reveal them through global-admin UI, and require tenant club-admin approval for initial machine enrollment or credential delivery changes that expose that tenant. Existing credentials of uncertain custody would not be grandfathered. This closes the role-only UI bypass within the stated infrastructure-operator trust boundary; it does not make a stolen bearer password safe. Record the user's answer before treating this policy as approved.
+The independent builder review identified shared authority-generation fencing and rotation-membership races; the explicit rules above settle them within the user's agreed behavior. The approved credential-custody policy is to replace existing application grants at migration, deliver the replacements only through the trusted deployment provisioning path, never reveal them through global-admin UI, and require tenant club-admin approval for initial machine enrollment or credential delivery changes that expose that tenant. Existing credentials of uncertain custody would not be grandfathered. This closes the role-only UI bypass within the stated infrastructure-operator trust boundary; it does not make a stolen bearer password safe. The user subsequently approved the complete design and authorized implementation.
 
 The builder may choose the bounded schema-validation library, index naming, internal module organization and framework-specific initialization hooks, provided the agreed behavior and acceptance criteria hold. Do not change the ownership/consent boundary, introduce request-time Vault reads, add automatic rotation-barrier timeouts, or keep runtime tokens in Vault as an implementation shortcut.
 

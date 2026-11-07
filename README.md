@@ -4,6 +4,8 @@ NestJS/TypeScript implementation of APP-35 for **local development**. It provisi
 
 ## Run
 
+For the complete local stack, see [Architecture: components, URLs, environment settings and databases](docs/ARCHITECTURE.md) and [Local startup: commands and ports](docs/LOCAL-STARTUP.md).
+
 Use **Node.js 24.x**, npm, and MongoDB 7 or 8. `.nvmrc` selects Node 24 (`nvm use`), and the package engine and Node type definitions target that major version. Tests require a local `mongod` executable (or `MONGOD_BINARY` pointing to one); they launch disposable loopback databases and never use your configured MongoDB URI. Install and verify:
 
 ```sh

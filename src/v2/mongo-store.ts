@@ -338,6 +338,7 @@ export class V2MongoStore {
       .sort({ versionNumber: -1 })
       .toArray() as Promise<Omit<ResourceVersion, "value">[]>;
   }
+  openVersion(scope:ResourceScope,resourceId:string,version:ResourceVersion):Buffer{const owner=scopeFilter(scope);if(version.resourceId!==resourceId||version.environment!==owner.environment||version.ownerType!==owner.ownerType||version.ownerId!==owner.ownerId)throw unavailable();return this.cipher.open(owner,resourceId,version._id,version.schemaIdentity,version.value)}
   async readValue(
     scope: ResourceScope,
     resourceId: string,

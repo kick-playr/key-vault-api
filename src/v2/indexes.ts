@@ -38,6 +38,7 @@ export const collectionDefinitions: Record<
         shape(
           {
             _id: string,
+            authorizationFence: numeric,
             tokenHash: { bsonType: "string", pattern: "^[a-f0-9]{64}$" },
             grantClass: {
               enum: ["application", "interactive-provisioner", "operator"],
@@ -92,12 +93,48 @@ export const collectionDefinitions: Record<
       },
     ],
   },
+  vault_deployment_custody: {
+    validator: shape({ _id: string, applicationId: string, environment: string,
+      mode: { enum: ["deployment-only"] }, deliveryId: string,
+      enabled: { bsonType: "bool" }, revision: numeric, authorizationFence: numeric,
+    }, ["_id", "applicationId", "environment", "mode", "deliveryId", "enabled", "revision"]),
+    indexes: [{ key: { applicationId: 1, environment: 1 }, unique: true, name: "deployment_custody" }],
+  },
+  vault_machine_enrollments: {
+    validator: { $and: [shape({
+      _id: { bsonType: ["string", "objectId"] }, applicationId: string, tenantId: string, environment: string,
+      approved: { bsonType: "bool" }, approvedBy: string, approvedAt: numeric,
+      revision: numeric, authorizationFence: numeric,
+    }, ["_id", "applicationId", "tenantId", "environment", "approved"]),
+    { $or: [{ approved: false }, { approved: true, approvedBy: { $type: "string" }, approvedAt: { $type: "number" } }] }] },
+    indexes: [{ key: { applicationId: 1, environment: 1, tenantId: 1 }, unique: true, name: "v2_entity_identity" }],
+  },
+  vault_grant_scopes: {
+    validator: shape(
+      {
+        _id: string,
+        grantId: string,
+        ...scoped,
+        revision: numeric,
+        authorizationFence: numeric,
+      },
+      ["_id", "grantId", "environment", "ownerType", "ownerId"],
+    ),
+    indexes: [
+      {
+        key: { grantId: 1, environment: 1, ownerType: 1, ownerId: 1 },
+        unique: true,
+        name: "grant_explicit_scope",
+      },
+    ],
+  },
   vault_resources: {
     validator: shape(
       {
         _id: string,
         ...scoped,
         name: string,
+        custody: { enum: ["admin-managed", "workload-only"] },
         kind: kinds,
         contentType: string,
         valueFormat: formats,
@@ -198,11 +235,21 @@ export const collectionDefinitions: Record<
 };
 /** Initialize individual collections; never installs a namespace/grant aggregate. */
 export async function installCollections(db: Db): Promise<void> {
-  const existing = new Set(
-    (await db.listCollections({}, { nameOnly: true }).toArray()).map(
-      (c) => c.name,
-    ),
+  const existing = new Map(
+    (await db.listCollections().toArray()).map((c) => [c.name, c]),
   );
+  const canonical = (value: any): string =>
+    JSON.stringify(
+      value && typeof value === "object"
+        ? Array.isArray(value)
+          ? value.map((v) => JSON.parse(canonical(v)))
+          : Object.fromEntries(
+              Object.keys(value)
+                .sort()
+                .map((k) => [k, JSON.parse(canonical(value[k]))]),
+            )
+        : value,
+    );
   for (const [name, definition] of Object.entries(collectionDefinitions)) {
     if (!existing.has(name))
       await db.createCollection(name, {
@@ -210,8 +257,41 @@ export async function installCollections(db: Db): Promise<void> {
         validationLevel: "strict",
         validationAction: "error",
       });
+    else {
+      const info = existing.get(name)!;
+      const options = "options" in info ? info.options : undefined;
+      if (
+        !options ||
+        options.validationLevel !== "strict" ||
+        options.validationAction !== "error" ||
+        canonical(options.validator) !== canonical(definition.validator)
+      )
+        throw Error(
+          "Existing Vault collection schema requires explicit migration",
+        );
+    }
     await db.collection(name).createIndexes(definition.indexes);
   }
+  for (const [name, key] of Object.entries({
+    vault_application_environments: { applicationId: 1, environment: 1 },
+    vault_application_tenants: {
+      applicationId: 1,
+      environment: 1,
+      tenantId: 1,
+    },
+    vault_tenant_admin_consents: { environment: 1, tenantId: 1 },
+    vault_integration_schemas: {
+      environment: 1,
+      ownerType: 1,
+      ownerId: 1,
+      name: 1,
+    },
+    vault_key_rotation_participants: { rotationId: 1, instanceId: 1 },
+    vault_identity_policies: { environment: 1 },
+  }))
+    await db
+      .collection(name)
+      .createIndex(key as any, { unique: true, name: "v2_entity_identity" });
   await db
     .collection("vault_change_heads")
     .createIndex(

@@ -21,7 +21,10 @@
     "test:runtime-manifests": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.runtime-manifests.config.cjs --runInBand",
     "test:manifest-plan": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.manifest-plan.config.cjs --runInBand",
     "test:grant-export": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.grant-export.config.cjs --runInBand",
-    "test:inventory": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.inventory-unit.config.cjs --runInBand"
+    "test:inventory": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.inventory-unit.config.cjs --runInBand",
+    "migrate:static-vault": "npm run build && node dist/v2/migration-cli.js",
+    "workload:resource": "npm run build && node dist/v2/workload-resource-cli.js",
+    "workload:key": "npm run build && node dist/v2/workload-key-cli.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",
@@ -30,6 +33,7 @@
     "@nestjs/swagger": "^12.0.5",
     "ajv": "^8.20.0",
     "express": "^5.3.0",
+    "jose": "^6.2.15",
     "mongodb": "^7.8.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
@@ -60,6 +64,21 @@
       "types": "./runtime-client/tenant-rotation.d.cts",
       "require": "./runtime-client/tenant-rotation.cjs",
       "import": "./runtime-client/tenant-rotation.cjs"
+    },
+    "./runtime-client/bootstrap": {
+      "types": "./runtime-client/bootstrap.d.cts",
+      "require": "./runtime-client/bootstrap.cjs",
+      "import": "./runtime-client/bootstrap.cjs"
+    },
+    "./runtime-client/server-bootstrap": {
+      "types": "./runtime-client/server-bootstrap.d.cts",
+      "require": "./runtime-client/server-bootstrap.cjs",
+      "import": "./runtime-client/server-bootstrap.cjs"
+    },
+    "./runtime-client/integration-runtime": {
+      "types": "./runtime-client/integration-runtime.d.cts",
+      "require": "./runtime-client/integration-runtime.cjs",
+      "import": "./runtime-client/integration-runtime.cjs"
     }
   },
   "typesVersions": {

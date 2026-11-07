@@ -177,6 +177,20 @@ export class IntegrationSchemas {
   constructor() {
     for (const [type, schema] of Object.entries(builtin))
       this.install("builtin:" + type + "@1", schema);
+    const pingen = builtin.pingen as { properties: Record<string, unknown> };
+    this.install("builtin:pingen@2", {
+      ...definition({ ...pingen.properties, webhookSecret: string }, []),
+      anyOf: [
+        { properties: { apiToken: string, organizationId: string }, required: ["apiToken", "organizationId"] },
+        { properties: { webhookSecret: string }, required: ["webhookSecret"] },
+      ],
+    });
+    const email = builtin.email as { properties: Record<string, unknown>; required: string[] };
+    this.install("builtin:email@2", {
+      ...definition({ ...email.properties, inboxFolder: {type:"string",minLength:1,maxLength:256}, archiveFolder: {type:"string",minLength:1,maxLength:256} }, email.required),
+      if: { properties: { protocol: { const: "imap" } }, required: ["protocol"] },
+      then: { properties: { inboxFolder: {type:"string",minLength:1,maxLength:256}, archiveFolder: {type:"string",minLength:1,maxLength:256} }, required: ["inboxFolder", "archiveFolder"] },
+    });
   }
   private install(identity: string, input: unknown): string {
     const schema = snapshot(input, 32768);

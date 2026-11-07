@@ -64,6 +64,26 @@ export class ConsentService {
     private readonly store: Pick<V2MongoStore, "transaction">,
     private readonly authorization: Authorization,
   ) {}
+  async status(actor: Actor, scope: ResourceScope) {
+    const target = identity(scope),
+      permit = await this.authorization.require(actor, "metadata:list", scope),
+      record = await this.store.transaction((tx) =>
+        tx.db
+          .collection<ConsentRecord>("vault_tenant_admin_consents")
+          .findOne(target, { session: tx.session }),
+      );
+    let canManage = false;
+    try {
+      await this.authorization.require(actor, "consent:write", scope);
+      canManage = true;
+    } catch {}
+    await this.authorization.assertCurrent(permit);
+    return {
+      enabled: record?.enabled ?? false,
+      revision: record?.revision ?? 0,
+      canManage,
+    };
+  }
   approve(actor: Actor, scope: ResourceScope, expectedRevision: number) {
     return this.save(actor, scope, expectedRevision, true);
   }
@@ -104,19 +124,17 @@ export class ConsentService {
         );
         if (result.matchedCount !== 1) throw Error("Vault document conflict");
       } else await collection.insertOne(next, { session: tx.session });
-      await tx.db
-        .collection<AuditRecord>("vault_audit_events")
-        .insertOne(
-          {
-            _id: randomUUID(),
-            ...scopeFilter(scope),
-            actorId: next.changedBy,
-            action: enabled ? "consent.approve" : "consent.revoke",
-            targetId: target._id,
-            at: Date.now(),
-          },
-          { session: tx.session },
-        );
+      await tx.db.collection<AuditRecord>("vault_audit_events").insertOne(
+        {
+          _id: randomUUID(),
+          ...scopeFilter(scope),
+          actorId: next.changedBy,
+          action: enabled ? "consent.approve" : "consent.revoke",
+          targetId: target._id,
+          at: Date.now(),
+        },
+        { session: tx.session },
+      );
       return { enabled, revision: next.revision };
     });
   }

@@ -411,3 +411,7 @@ The independent builder review identified shared authority-generation fencing an
 The builder may choose the bounded schema-validation library, index naming, internal module organization and framework-specific initialization hooks, provided the agreed behavior and acceptance criteria hold. Do not change the ownership/consent boundary, introduce request-time Vault reads, add automatic rotation-barrier timeouts, or keep runtime tokens in Vault as an implementation shortcut.
 
 After approval of this design, create a separate implementation plan covering Vault persistence/API, Vault APP/Explorer administration, shared SDK, each consumer adapter, migration tooling and verification. No service start, live migration, secret replacement, token refresh or deployment is part of writing this design.
+
+## Approved workload-only custody amendment (2026-11-07)
+
+Application database credentials and control keys are workload-only. Application grants can load explicitly linked values; administrators see metadata, links, versions and status. Human reveal or value/lifecycle mutation is denied regardless of tenant consent. A separately authenticated, explicitly scoped deployment operator performs provisioning and changes while preserving CAS, audit and rotation barriers. Missing application-resource classification fails closed; migration must explicitly classify ordinary application material before enabling interactive value administration. Details and verification are in `../plans/2026-11-07-workload-custody.md`.

@@ -55,7 +55,7 @@ it("requires explicit assignment for tenant links and preserves their owner", ()
     ),
   ).toThrow();
 });
-it("restricts app-owned links to that application and validates ENV names", () => {
+it("allows explicitly authorized app sharing while validating ENV names", () => {
   const resource = {
     environment: "development",
     ownerType: "application" as const,
@@ -72,7 +72,7 @@ it("restricts app-owned links to that application and validates ENV names", () =
       "KEY",
       "latest",
     ),
-  ).toThrow();
+  ).not.toThrow();
   expect(() =>
     validateLink(
       resource,
@@ -95,4 +95,29 @@ it("restricts app-owned links to that application and validates ENV names", () =
       "latest",
     ),
   ).toThrow();
+});
+it("does not permit mapped secrets to alter process execution or public build variables", () => {
+  const resource = {
+    environment: "development",
+    ownerType: "application" as const,
+    ownerId: "club-api",
+    enabled: true,
+  };
+  for (const name of [
+    "NODE_OPTIONS",
+    "PATH",
+    "NEXT_PUBLIC_SECRET",
+    "LD_PRELOAD",
+  ])
+    expect(() =>
+      validateLink(
+        resource,
+        "club-api",
+        "development",
+        undefined,
+        false,
+        name,
+        "latest",
+      ),
+    ).toThrow();
 });

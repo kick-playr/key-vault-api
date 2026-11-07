@@ -15,6 +15,7 @@ export interface ValueEnvelope extends CipherPart {
   readonly wrappedKey: CipherPart;
 }
 export interface ResourceRecord extends ResourceScope {
+  custody?: "admin-managed" | "workload-only";
   _id: string;
   name: string;
   kind: ResourceKind;
@@ -51,6 +52,7 @@ export type GrantCapability =
 export interface GrantRecord {
   _id: string;
   tokenHash: string;
+  authorizationFence?: number;
   grantClass: "application" | "interactive-provisioner" | "operator";
   applicationId?: string;
   environment: string;

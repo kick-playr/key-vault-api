@@ -307,3 +307,5 @@ exports.applicationSnapshotFromTenantLegacy=require('./application-client.cjs').
 
 exports.createTenantRotationCoordinator=require('./tenant-rotation.cjs').createTenantRotationCoordinator;
 exports.createMongoTenantRotationStore=require('./tenant-rotation.cjs').createMongoTenantRotationStore;
+
+exports.createMemoryRuntime=require('./memory-runtime.cjs').createMemoryRuntime;

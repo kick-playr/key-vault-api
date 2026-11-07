@@ -105,3 +105,41 @@ it("rechecks membership changes and does not trust caller-supplied admin flags",
     ),
   ).rejects.toThrow();
 });
+it("does not let a provisioning credential borrow capabilities from a global-admin identity", async () => {
+  const { bindProvisioning } =
+    await import("../../src/v2/provisioning-proof.js");
+  const actor = bindProvisioning(
+    { issuer: "https://global.example", subject: "global" },
+    {
+      grantId: "p",
+      revision: 1,
+      environment: "development",
+      tokenHash: "a".repeat(64),
+      capabilities: ["metadata:list"],
+    },
+  );
+  const authorization = new Authorization(
+    {
+      roles: async () => ({
+        revision: "1",
+        globalAdmin: true,
+        clubAdminTenantIds: [],
+      }),
+    },
+    { read: async () => ({ enabled: true, revision: 1 }) },
+  );
+  await expect(
+    authorization.require(actor, "metadata:list", {
+      environment: "development",
+      ownerType: "tenant",
+      ownerId: "fcrww",
+    }),
+  ).resolves.toEqual({ allowed: true });
+  await expect(
+    authorization.require(actor, "values:read", {
+      environment: "development",
+      ownerType: "tenant",
+      ownerId: "fcrww",
+    }),
+  ).rejects.toThrow();
+});

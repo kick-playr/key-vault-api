@@ -105,19 +105,17 @@ export class GrantService {
         { session: tx.session },
       );
       if (changed.matchedCount !== 1) throw conflict();
-      await tx.db
-        .collection<AuditRecord>("vault_audit_events")
-        .insertOne(
-          {
-            _id: randomUUID(),
-            ...scope,
-            actorId: actor.issuer + "|" + actor.subject,
-            action: "grant.revoke",
-            targetId: id,
-            at: Date.now(),
-          },
-          { session: tx.session },
-        );
+      await tx.db.collection<AuditRecord>("vault_audit_events").insertOne(
+        {
+          _id: randomUUID(),
+          ...scope,
+          actorId: actor.issuer + "|" + actor.subject,
+          action: "grant.revoke",
+          targetId: id,
+          at: Date.now(),
+        },
+        { session: tx.session },
+      );
     });
   }
   async issue(
@@ -265,19 +263,17 @@ export class GrantService {
         { session: tx.session },
       );
       if (activated.matchedCount !== 1) throw conflict();
-      await tx.db
-        .collection<AuditRecord>("vault_audit_events")
-        .insertOne(
-          {
-            _id: randomUUID(),
-            ...scope,
-            actorId: actor.issuer + "|" + actor.subject,
-            action: input.replaces ? "grant.rotate" : "grant.issue",
-            targetId: record._id,
-            at: Date.now(),
-          },
-          { session: tx.session },
-        );
+      await tx.db.collection<AuditRecord>("vault_audit_events").insertOne(
+        {
+          _id: randomUUID(),
+          ...scope,
+          actorId: actor.issuer + "|" + actor.subject,
+          action: input.replaces ? "grant.rotate" : "grant.issue",
+          targetId: record._id,
+          at: Date.now(),
+        },
+        { session: tx.session },
+      );
     });
     return metadata({ ...record, enabled: true, revision: 2 });
   }

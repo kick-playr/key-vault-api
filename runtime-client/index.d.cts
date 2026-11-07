@@ -70,3 +70,5 @@ export function applicationDescriptorFromTenantLegacy(application:string,scope:S
 export function applicationSnapshotFromTenantLegacy(application:string,snapshot:RuntimeSnapshot):ApplicationSnapshot;
 
 export * from './tenant-rotation.cjs';
+
+export function createMemoryRuntime(source:Pick<import('./server-bootstrap.cjs').ServerBootstrap,'load'|'status'|'context'|'tenantIds'|'close'>,applicationId:string,environment:string):SecretsRuntime;

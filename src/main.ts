@@ -1,9 +1,12 @@
 import { createApp } from './app.js';
-import { loadBootstrapConfig } from './config.js';
+import {createActivatedV2App} from './v2/activated-app.js';
+import { loadBootstrapConfig, loadBootstrapEnvironment } from './config.js';
 import { describeSystemError, formatStartupError, VaultError } from './errors.js';
 async function main() {
   const config = loadBootstrapConfig();
-  const app = await createApp(config).catch(error => {
+  const authority=loadBootstrapEnvironment().VAULT_STORAGE_AUTHORITY;
+  if(authority&&authority!=='v2'&&authority!=='legacy')throw Error('Invalid Vault storage authority');
+  const app = await (authority==='v2'?createActivatedV2App(config):createApp(config)).catch(error => {
     if (error instanceof VaultError) throw error;
     throw new VaultError(500, 'StartupFailed', `Application initialization: ${describeSystemError(error)}`);
   });

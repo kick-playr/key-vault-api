@@ -1,3 +1,4 @@
+import { copyActor, provisioningAllows } from "./provisioning-proof.js";
 import type { ResourceScope } from "./records.js";
 import { scopeFilter, type V2Transaction } from "./mongo-store.js";
 export interface Actor {
@@ -34,6 +35,7 @@ export interface ConsentReader {
 export type AdminAction =
   | "metadata:list"
   | "values:read"
+  | "keys:export"
   | "resources:write"
   | "links:write"
   | "grants:admin"
@@ -75,7 +77,7 @@ export class Authorization {
     scope: ResourceScope,
   ): Promise<Observation> {
     const owner = scopeFilter(scope),
-      identity = { issuer: actor.issuer, subject: actor.subject };
+      identity = copyActor(actor);
     if (
       ![identity.issuer, identity.subject].every(
         (v) =>
@@ -91,7 +93,8 @@ export class Authorization {
       roles = await this.authority.roles(identity, owner);
       consent =
         owner.ownerType === "tenant" ? await this.consents.read(owner) : null;
-    } catch {
+    } catch (error) {
+      if (error instanceof AccessDenied) throw error;
       throw new AuthorityUnavailable();
     }
     if (
@@ -117,6 +120,7 @@ export class Authorization {
     const known: AdminAction[] = [
       "metadata:list",
       "values:read",
+      "keys:export",
       "resources:write",
       "links:write",
       "grants:admin",
@@ -136,7 +140,8 @@ export class Authorization {
           club ||
           (global && (action === "metadata:list" || consent?.enabled === true));
     }
-    if (!allowed) throw new AccessDenied();
+    if (!allowed || !provisioningAllows(identity, action))
+      throw new AccessDenied();
     return {
       actor: identity,
       action,

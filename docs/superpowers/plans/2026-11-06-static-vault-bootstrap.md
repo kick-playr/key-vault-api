@@ -13,7 +13,7 @@
 ## Global Constraints
 - Database names: `key-vault-kick-playr`, `control-kick-playr`, `<tenant>-kick-playr`; derive tenant names from validated IDs only.
 - Work directly on each repository's existing authorized branch; preserve unrelated edits. No feature branches/worktrees.
-- No live migration, irreversible cleanup, provisioning to external deployments, service starts or deployment during offline implementation. Prepare reviewable maintenance commands; obtain execution approval before those actions.
+- Original offline phase prohibited live changes. On 2026-11-07 the user explicitly authorized migration/cutover and service restarts; execution evidence and preserved backups are recorded in 2026-11-07-static-vault-cutover.md and the private ledger. No unrelated deployment or cleanup is authorized.
 - No namespace-wide grant arrays; one document per grant/resource/version/link. Plaintext metadata; encrypted values; hashed high-entropy grant passwords.
 - Static credentials only in Vault. Runtime tokens only in encrypted tenant storage; optional encrypted Redis cache.
 - Requests use memory; fetch interval >=60 seconds; no change means no adaptation; startup unready/retry with `Key Vault is not connected`.
@@ -136,3 +136,7 @@
 - Tasks 1–2: implemented and tested normalized MongoDB foundation. Foundation 3/3 and disposable replica-set persistence 4/4 passed; legacy/default suite 240/240 passed before the additional scoped-query hardening regression, whose targeted suite and typecheck also pass. Metadata is plaintext; only values encrypted. Live services/databases untouched.
 
 - 2026-11-07: Tasks 3–4 library slice added: consent/grant authorization, typed integration schemas, resource version/update/reveal/delete and explicit link validation. Unit 17/17, disposable Mongo 7/7, default regression suite 257/257 and typecheck pass. Production identity/delivery wiring, persisted schemas and further link race coverage remain; these tasks are intentionally unchecked.
+
+## Integrated cutover checkpoint — 2026-11-07
+
+Tasks 3–6, 8–11 now have integrated implementations and live migration evidence; the historical per-task commit checkboxes above are retained rather than imply new commits were made. Task 7 implements the durable barrier, Club API wrapping-key proof and fail-closed migration-evidence gates. Captured Clerk/index/control keys remain maintenance-only, with no fabricated installation acknowledgements. Task 12 verification passed: 334 Vault tests, 93 focused Club API checks, consumer typechecks/builds, public-artifact scans and fresh review; see [cutover record](2026-11-07-static-vault-cutover.md). Bexio fresh authorization and signed-in business timing remain external execution prerequisites. No commits/pushes were included in this continuation.

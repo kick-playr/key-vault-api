@@ -103,3 +103,18 @@ it("rejects asynchronous schema validation", () => {
     }),
   ).toThrow();
 });
+it('keeps email v1 immutable and carries IMAP folder configuration in email v2',()=>{
+ const schemas=new IntegrationSchemas(),base={host:'mail.invalid',port:993,tls:'implicit',username:'user',password:'private'};
+ expect(()=>schemas.validate('builtin:email@2',{...base,protocol:'imap'})).toThrow();
+ const imap={...base,protocol:'imap',inboxFolder:'INBOX',archiveFolder:'Processed'};
+ expect(schemas.validate('builtin:email@2',imap)).toEqual(imap);
+ expect(()=>schemas.validate('builtin:email@1',imap)).toThrow();
+ expect(schemas.validate('builtin:email@2',{...base,protocol:'smtp'})).toHaveProperty('host');
+});
+it('versioned Pingen schema supports distinct webhook credentials without copying an outbound token',()=>{
+ const schemas=new IntegrationSchemas();
+ expect(schemas.validate('builtin:pingen@2',{webhookSecret:'private-webhook'})).toEqual({webhookSecret:'private-webhook'});
+ expect(schemas.validate('builtin:pingen@2',{apiToken:'outbound',organizationId:'org'})).toHaveProperty('organizationId');
+ expect(()=>schemas.validate('builtin:pingen@1',{webhookSecret:'private-webhook'})).toThrow();
+ expect(()=>schemas.validate('builtin:pingen@2',{})).toThrow();
+});
